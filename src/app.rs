@@ -324,18 +324,39 @@ impl CodexRollbackBridgeApp {
     }
 
     fn render_rollback_section(&mut self, ui: &mut egui::Ui) {
-        let can_generate = self.snapshot.is_some();
+        let has_snapshot = self.snapshot.is_some();
+        let dirty = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.dirty)
+            .unwrap_or(false);
 
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(can_generate, Button::new("ロールバック"))
+                .add_enabled(has_snapshot && dirty, Button::new("編集ロールバック"))
                 .clicked()
             {
-                self.copy_rollback_instruction();
+                self.copy_worktree_rollback_command();
             }
 
-            ui.label("ロールバック対象: HEAD固定");
+            if ui
+                .add_enabled(has_snapshot && !dirty, Button::new("1コミット戻す"))
+                .clicked()
+            {
+                self.copy_previous_head_rollback_command();
+            }
         });
+
+        if !has_snapshot {
+            ui.label("監視データ未取得のためコマンド生成できません");
+            return;
+        }
+
+        if dirty {
+            ui.label("作業ツリー変更あり: 先に「編集ロールバック」を実行してください");
+        } else {
+            ui.label("作業ツリー変更なし: 「1コミット戻す」を実行できます");
+        }
     }
 
     fn render_project_change_dialog(&mut self, ctx: &egui::Context) {
@@ -558,29 +579,65 @@ impl CodexRollbackBridgeApp {
         self.save_settings_with_log();
     }
 
-    fn copy_rollback_instruction(&mut self) {
-        let Some(snapshot) = self.snapshot.clone() else {
+    fn copy_worktree_rollback_command(&mut self) {
+        let Some(snapshot) = self.snapshot.as_ref() else {
             self.set_copy_feedback("監視データ未取得のため生成できません", true);
-            self.log("ロールバック文生成失敗: 監視データ未取得");
+            self.log("編集ロールバック生成失敗: 監視データ未取得");
             return;
         };
 
-        let instruction = command_template::build_codex_instruction(&snapshot);
+        let instruction = command_template::build_worktree_rollback_command(snapshot);
 
         match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(instruction)) {
             Ok(()) => {
                 self.last_error = None;
                 self.set_copy_feedback(
-                    "HEAD固定のロールバック文をクリップボードにコピーしました",
+                    "編集ロールバックコマンドをクリップボードにコピーしました",
                     false,
                 );
-                self.log("ロールバック文コピー成功");
+                self.log("編集ロールバックコマンドコピー成功");
             }
             Err(err) => {
                 let message = format!("クリップボードコピー失敗: {err}");
                 self.last_error = Some(message.clone());
                 self.set_copy_feedback(message.clone(), true);
-                self.log(format!("ロールバック文コピー失敗: {err}"));
+                self.log(format!("編集ロールバックコマンドコピー失敗: {err}"));
+            }
+        }
+    }
+
+    fn copy_previous_head_rollback_command(&mut self) {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            self.set_copy_feedback("監視データ未取得のため生成できません", true);
+            self.log("1コミット戻す生成失敗: 監視データ未取得");
+            return;
+        };
+
+        if snapshot.dirty {
+            self.set_copy_feedback(
+                "作業ツリー変更があるため先に「編集ロールバック」を実行してください",
+                true,
+            );
+            self.log("1コミット戻す生成失敗: 作業ツリー変更あり");
+            return;
+        }
+
+        let instruction = command_template::build_previous_head_rollback_command(snapshot);
+
+        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(instruction)) {
+            Ok(()) => {
+                self.last_error = None;
+                self.set_copy_feedback(
+                    "1コミット戻すコマンドをクリップボードにコピーしました",
+                    false,
+                );
+                self.log("1コミット戻すコマンドコピー成功");
+            }
+            Err(err) => {
+                let message = format!("クリップボードコピー失敗: {err}");
+                self.last_error = Some(message.clone());
+                self.set_copy_feedback(message.clone(), true);
+                self.log(format!("1コミット戻すコマンドコピー失敗: {err}"));
             }
         }
     }
