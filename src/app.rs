@@ -278,7 +278,7 @@ impl CodexRollbackBridgeApp {
         if let Some(target) = &self.selected_target_commit {
             ui.label(format!("target_full_id: {target}"));
         } else {
-            ui.colored_label(Color32::YELLOW, "ターゲットコミット未選択");
+            ui.colored_label(Color32::from_rgb(128, 96, 0), "ターゲットコミット未選択");
         }
 
         if !self.material_kind.is_empty() {
@@ -320,12 +320,25 @@ impl CodexRollbackBridgeApp {
         });
     }
 
+    fn apply_black_text_visuals(ui: &mut egui::Ui) {
+        let black = Color32::from_rgb(0, 0, 0);
+        let visuals = ui.visuals_mut();
+        visuals.override_text_color = Some(black);
+        visuals.weak_text_color = Some(black);
+        visuals.widgets.noninteractive.fg_stroke.color = black;
+        visuals.widgets.inactive.fg_stroke.color = black;
+        visuals.widgets.hovered.fg_stroke.color = black;
+        visuals.widgets.active.fg_stroke.color = black;
+        visuals.widgets.open.fg_stroke.color = black;
+        visuals.disabled_alpha = 1.0;
+    }
+
     fn status_color(&self) -> Color32 {
         match self.app_status {
-            AppStatus::ProjectUnselected => Color32::GRAY,
-            AppStatus::Selected => Color32::GREEN,
-            AppStatus::Updating => Color32::YELLOW,
-            AppStatus::Error => Color32::RED,
+            AppStatus::ProjectUnselected => Color32::from_rgb(0, 0, 0),
+            AppStatus::Selected => Color32::from_rgb(0, 96, 0),
+            AppStatus::Updating => Color32::from_rgb(128, 96, 0),
+            AppStatus::Error => Color32::from_rgb(160, 0, 0),
         }
     }
 
@@ -477,10 +490,12 @@ impl eframe::App for CodexRollbackBridgeApp {
         self.poll_monitor_events();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            Self::apply_black_text_visuals(ui);
             self.render_top_panel(ui);
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            Self::apply_black_text_visuals(ui);
             if self.selected_repo_path.is_some() {
                 self.render_main_screen(ui);
             } else {
