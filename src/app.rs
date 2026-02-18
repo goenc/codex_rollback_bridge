@@ -1,11 +1,17 @@
+use crate::command_template;
 use crate::config;
 use crate::git;
 use crate::material;
 use crate::models::{AppStatus, RepoCandidate, RepoSnapshot, ScanScope, Settings};
 use crate::monitor::{MonitorCommand, MonitorController, MonitorEvent};
-use eframe::egui::{self, Color32, RichText, ScrollArea};
+use eframe::egui::{self, Button, Color32, Grid, RichText, ScrollArea};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+struct CopyFeedback {
+    message: String,
+    is_error: bool,
+}
 
 pub struct CodexRollbackBridgeApp {
     project_root: PathBuf,
@@ -13,7 +19,6 @@ pub struct CodexRollbackBridgeApp {
     app_status: AppStatus,
     git_available: bool,
     root_folder_input: String,
-    direct_repo_input: String,
     scan_scope: ScanScope,
     scan_results: Vec<RepoCandidate>,
     selected_scan_index: Option<usize>,
@@ -27,6 +32,9 @@ pub struct CodexRollbackBridgeApp {
     logs: Vec<String>,
     monitor: MonitorController,
     config_contract: String,
+    consecutive_failures: u32,
+    show_project_change_dialog: bool,
+    copy_feedback: Option<CopyFeedback>,
 }
 
 impl CodexRollbackBridgeApp {
@@ -53,14 +61,10 @@ impl CodexRollbackBridgeApp {
             app_status: AppStatus::ProjectUnselected,
             git_available: git::git_exists(),
             root_folder_input,
-            direct_repo_input: settings
-                .selected_repo_path
-                .clone()
-                .unwrap_or(default_project_root_text),
             scan_scope: settings.scan_scope,
             scan_results: Vec::new(),
             selected_scan_index: None,
-            selected_repo_path,
+            selected_repo_path: selected_repo_path.clone(),
             snapshot: None,
             selected_target_commit: None,
             material_text: String::new(),
@@ -70,6 +74,9 @@ impl CodexRollbackBridgeApp {
             logs: load_result.logs,
             monitor: MonitorController::new(settings.update_interval_sec),
             config_contract: config::config_contract_line(),
+            consecutive_failures: 0,
+            show_project_change_dialog: selected_repo_path.is_none(),
+            copy_feedback: None,
         };
 
         if !app.git_available {
@@ -95,6 +102,7 @@ impl CodexRollbackBridgeApp {
                 MonitorEvent::Snapshot(snapshot) => {
                     self.app_status = AppStatus::Selected;
                     self.last_error = None;
+                    self.consecutive_failures = 0;
                     if let Some(target_full_id) = self.selected_target_commit.as_ref() {
                         let still_exists = snapshot
                             .recent_commits
@@ -111,6 +119,7 @@ impl CodexRollbackBridgeApp {
                     consecutive_failures,
                 } => {
                     self.app_status = AppStatus::Error;
+                    self.consecutive_failures = consecutive_failures;
                     let decorated_message =
                         format!("更新失敗({consecutive_failures}回連続): {message}");
                     self.last_error = Some(decorated_message.clone());
@@ -120,113 +129,22 @@ impl CodexRollbackBridgeApp {
         }
     }
 
-    fn render_top_panel(&self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+    fn render_top_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
             ui.heading("Codex Rollback Bridge");
             ui.separator();
-            ui.colored_label(
-                self.status_color(),
-                RichText::new(format!("状態: {}", self.app_status.label())).strong(),
-            );
-        });
-
-        if let Some(error) = &self.last_error {
-            ui.colored_label(Color32::RED, error);
-        }
-    }
-
-    fn render_project_selection(&mut self, ui: &mut egui::Ui) {
-        ui.heading("プロジェクト選択");
-        ui.label("ルートフォルダ配下をスキャンして Git リポジトリ候補を表示します。");
-
-        ui.horizontal(|ui| {
-            ui.label("ルート:");
-            ui.text_edit_singleline(&mut self.root_folder_input);
-            if ui.button("ワークスペース").clicked() {
-                self.root_folder_input = self.project_root.to_string_lossy().to_string();
+            let current_project = self
+                .selected_repo_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| "(未選択)".to_string());
+            ui.label(format!("現在プロジェクト: {current_project}"));
+            if ui.button("プロジェクト変更").clicked() {
+                self.show_project_change_dialog = true;
             }
         });
 
-        let old_scope = self.scan_scope;
-        ui.horizontal(|ui| {
-            ui.label("スキャン範囲:");
-            ui.radio_value(&mut self.scan_scope, ScanScope::Direct, "直下のみ");
-            ui.radio_value(&mut self.scan_scope, ScanScope::Depth2, "深さ2まで");
-        });
-        if old_scope != self.scan_scope {
-            self.save_settings_with_log();
-        }
-
-        ui.horizontal(|ui| {
-            if ui.button("スキャン実行").clicked() {
-                self.scan_repositories();
-            }
-            if ui.button("設定保存").clicked() {
-                self.save_settings_with_log();
-            }
-        });
-
-        if self.scan_results.is_empty() {
-            ui.label("候補なし");
-            return;
-        }
-
-        ui.separator();
-        ui.label("候補プロジェクト一覧");
-        ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-            let mut clicked_index = None;
-            for (index, candidate) in self.scan_results.iter().enumerate() {
-                let selected = self.selected_scan_index == Some(index);
-                let label = format!(
-                    "{} | {} | {} | {}",
-                    candidate.folder_name,
-                    candidate.path.display(),
-                    candidate.current_branch,
-                    candidate.last_commit_datetime
-                );
-                if ui.selectable_label(selected, label).clicked() {
-                    clicked_index = Some(index);
-                }
-            }
-            if let Some(index) = clicked_index {
-                self.selected_scan_index = Some(index);
-            }
-        });
-
-        if ui.button("選択確定").clicked() {
-            self.confirm_selected_repo();
-        }
-
-        ui.separator();
-        ui.label("直接選択");
-        ui.horizontal(|ui| {
-            ui.label("リポジトリ:");
-            ui.text_edit_singleline(&mut self.direct_repo_input);
-            if ui.button("このプロジェクト").clicked() {
-                self.direct_repo_input = self.project_root.to_string_lossy().to_string();
-            }
-        });
-        if ui.button("このパスを選択").clicked() {
-            self.confirm_direct_repo_input();
-        }
-    }
-
-    fn render_main_screen(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.button("プロジェクト再選択").clicked() {
-                self.clear_selected_repo();
-            }
-            if ui.button("手動更新").clicked() {
-                self.app_status = AppStatus::Updating;
-                self.monitor.send(MonitorCommand::ManualRefresh);
-            }
-        });
-
-        if let Some(repo_path) = &self.selected_repo_path {
-            ui.label(format!("監視対象: {}", repo_path.display()));
-        }
-
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("更新間隔(秒):");
             let mut interval = self.settings.update_interval_sec;
             let response = ui.add(egui::DragValue::new(&mut interval).range(1..=3600));
@@ -237,100 +155,307 @@ impl CodexRollbackBridgeApp {
                 ));
                 self.save_settings_with_log();
             }
+
+            let can_manual_refresh = self.git_available && self.selected_repo_path.is_some();
+            if ui
+                .add_enabled(can_manual_refresh, Button::new("手動更新"))
+                .clicked()
+            {
+                self.app_status = AppStatus::Updating;
+                self.monitor.send(MonitorCommand::ManualRefresh);
+            }
+
+            ui.separator();
+            ui.colored_label(
+                self.status_color(),
+                RichText::new(format!("状態: {}", self.app_status.label())).strong(),
+            );
+            ui.separator();
+
+            let (dirty_label, dirty_color) = self.dirty_indicator();
+            ui.colored_label(dirty_color, RichText::new(dirty_label).strong());
         });
 
+        if self.consecutive_failures >= 3 {
+            ui.colored_label(
+                Color32::from_rgb(160, 0, 0),
+                RichText::new("更新失敗が3回以上連続しています").strong(),
+            );
+        }
+
+        if let Some(error) = &self.last_error {
+            ui.colored_label(Color32::RED, error);
+        }
+
+        if let Some(feedback) = &self.copy_feedback {
+            let color = if feedback.is_error {
+                Color32::from_rgb(160, 0, 0)
+            } else {
+                Color32::from_rgb(0, 96, 0)
+            };
+            ui.colored_label(color, &feedback.message);
+        }
+    }
+
+    fn render_main_content(&mut self, ui: &mut egui::Ui) {
+        if self.selected_repo_path.is_none() {
+            ui.label("プロジェクト未選択です。上部の「プロジェクト変更」から選択してください。");
+            return;
+        }
+
+        if let Some(snapshot) = self.snapshot.clone() {
+            self.render_snapshot_summary(ui, &snapshot);
+            ui.separator();
+            self.render_commit_table(ui, &snapshot);
+        } else {
+            ui.label("監視データ未取得（更新待ち）");
+        }
+
         ui.separator();
-        if let Some(snapshot) = &self.snapshot {
+        self.render_commit_instruction_section(ui);
+        ui.separator();
+        self.render_material_section(ui);
+    }
+
+    fn render_snapshot_summary(&self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
+        ui.horizontal_wrapped(|ui| {
             ui.label(format!("現在ブランチ: {}", snapshot.current_branch));
-            ui.label(format!("HEAD: {}", snapshot.head_full_id));
-            ui.label(format!("HEAD message: {}", snapshot.head_message));
-            ui.label(format!("HEAD datetime: {}", snapshot.head_datetime));
-            ui.label(format!("dirty: {}", snapshot.dirty));
-            ui.label(format!("head_changed: {}", snapshot.head_changed));
-            ui.label(format!(
-                "consecutive_update_failures: {}",
-                snapshot.consecutive_update_failures
-            ));
             ui.separator();
+            ui.label(format!("HEAD: {}", snapshot.head_full_id));
+            ui.separator();
+            ui.label(format!("HEAD日時: {}", snapshot.head_datetime));
+            ui.separator();
+            ui.label(format!("head_changed: {}", snapshot.head_changed));
+        });
+        ui.label(format!("HEADメッセージ: {}", snapshot.head_message));
 
-            ui.label("コミット一覧（最大50）");
-            ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                let mut clicked_target: Option<String> = None;
-                for commit in &snapshot.recent_commits {
-                    let selected = self
-                        .selected_target_commit
-                        .as_deref()
-                        .map(|id| id == commit.full_id)
-                        .unwrap_or(false);
-                    let row = format!(
-                        "{} | {} | {}",
-                        commit.datetime, commit.short_id, commit.message
-                    );
-                    if ui.selectable_label(selected, row).clicked() {
-                        clicked_target = Some(commit.full_id.clone());
-                    }
-                }
-                if let Some(target) = clicked_target {
-                    self.selected_target_commit = Some(target);
-                }
-            });
+        let dirty_color = if snapshot.dirty {
+            Color32::from_rgb(160, 0, 0)
         } else {
-            ui.label("監視データ未取得");
-        }
+            Color32::from_rgb(0, 96, 0)
+        };
+        ui.colored_label(dirty_color, format!("dirty: {}", snapshot.dirty));
+    }
 
-        ui.separator();
+    fn render_commit_table(&mut self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
+        ui.label("コミット一覧（最大50）");
+
+        let mut clicked_target: Option<String> = None;
+        ScrollArea::vertical()
+            .id_salt("commit_table_scroll")
+            .max_height(280.0)
+            .show(ui, |ui| {
+                Grid::new("commit_table_grid")
+                    .num_columns(4)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("datetime");
+                        ui.strong("short_id");
+                        ui.strong("message");
+                        ui.strong("状態");
+                        ui.end_row();
+
+                        for commit in snapshot.recent_commits.iter().take(50) {
+                            let is_target = self
+                                .selected_target_commit
+                                .as_deref()
+                                .map(|id| id == commit.full_id)
+                                .unwrap_or(false);
+
+                            let datetime_text = if is_target {
+                                RichText::new(&commit.datetime).strong()
+                            } else {
+                                RichText::new(&commit.datetime)
+                            };
+
+                            if ui.selectable_label(is_target, datetime_text).clicked() {
+                                clicked_target = Some(commit.full_id.clone());
+                            }
+                            ui.label(&commit.short_id);
+                            ui.label(&commit.message);
+                            ui.label(self.commit_state_label(snapshot, &commit.full_id));
+                            ui.end_row();
+                        }
+                    });
+            });
+
+        if let Some(target) = clicked_target {
+            self.selected_target_commit = Some(target);
+            self.copy_feedback = None;
+        }
+    }
+
+    fn render_commit_instruction_section(&mut self, ui: &mut egui::Ui) {
+        let can_generate = self.snapshot.is_some() && self.selected_target_commit.is_some();
+
         ui.horizontal(|ui| {
-            if ui.button("最小素材生成").clicked() {
-                self.generate_material(false);
+            if ui
+                .add_enabled(can_generate, Button::new("コミット命令"))
+                .clicked()
+            {
+                self.copy_commit_instruction();
             }
-            if ui.button("詳細素材生成").clicked() {
-                self.generate_material(true);
+
+            if let Some(target) = &self.selected_target_commit {
+                ui.label(format!("TARGET: {target}"));
+            } else {
+                ui.colored_label(Color32::from_rgb(128, 96, 0), "ターゲットコミット未選択");
             }
         });
+    }
 
-        if let Some(target) = &self.selected_target_commit {
-            ui.label(format!("target_full_id: {target}"));
-        } else {
-            ui.colored_label(Color32::from_rgb(128, 96, 0), "ターゲットコミット未選択");
-        }
-
-        if !self.material_kind.is_empty() {
-            ui.separator();
-            ui.label(format!("生成種別: {}", self.material_kind));
-            ui.label(format!(
-                "UTF-8 bytes (text/json): {}/{}",
-                self.material_text.len(),
-                self.material_json.len()
-            ));
+    fn render_material_section(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("素材生成（既存機能）", |ui| {
             ui.horizontal(|ui| {
-                if ui.button("テキストをコピー").clicked() {
-                    ui.ctx().copy_text(self.material_text.clone());
+                if ui.button("最小素材生成").clicked() {
+                    self.generate_material(false);
                 }
-                if ui.button("JSONをコピー").clicked() {
-                    ui.ctx().copy_text(self.material_json.clone());
+                if ui.button("詳細素材生成").clicked() {
+                    self.generate_material(true);
                 }
             });
-            ui.collapsing("人間向けテキスト", |ui| {
-                ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                    ui.code(&self.material_text);
+
+            if !self.material_kind.is_empty() {
+                ui.separator();
+                ui.label(format!("生成種別: {}", self.material_kind));
+                ui.label(format!(
+                    "UTF-8 bytes (text/json): {}/{}",
+                    self.material_text.len(),
+                    self.material_json.len()
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("テキストをコピー").clicked() {
+                        ui.ctx().copy_text(self.material_text.clone());
+                    }
+                    if ui.button("JSONをコピー").clicked() {
+                        ui.ctx().copy_text(self.material_json.clone());
+                    }
+                });
+                ui.collapsing("人間向けテキスト", |ui| {
+                    ScrollArea::vertical()
+                        .id_salt("material_text_scroll")
+                        .max_height(220.0)
+                        .show(ui, |ui| {
+                            ui.code(&self.material_text);
+                        });
+                });
+                ui.collapsing("JSON", |ui| {
+                    ScrollArea::vertical()
+                        .id_salt("material_json_scroll")
+                        .max_height(220.0)
+                        .show(ui, |ui| {
+                            ui.code(&self.material_json);
+                        });
+                });
+            }
+        });
+    }
+
+    fn render_project_change_dialog(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_project_change_dialog;
+        let mut close_requested = false;
+
+        egui::Window::new("プロジェクト変更")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(900.0)
+            .default_height(540.0)
+            .show(ctx, |ui| {
+                ui.label("ルートフォルダ配下をスキャンして Git リポジトリ候補を選択します。");
+
+                ui.horizontal(|ui| {
+                    ui.label("ルート:");
+                    ui.text_edit_singleline(&mut self.root_folder_input);
+                    if ui.button("フォルダ選択").clicked() {
+                        self.pick_root_folder();
+                    }
+                    if ui.button("ワークスペース").clicked() {
+                        self.root_folder_input = self.project_root.to_string_lossy().to_string();
+                        self.save_settings_with_log();
+                    }
+                });
+
+                let old_scope = self.scan_scope;
+                ui.horizontal(|ui| {
+                    ui.label("スキャン範囲:");
+                    ui.radio_value(&mut self.scan_scope, ScanScope::Direct, "直下のみ");
+                    ui.radio_value(&mut self.scan_scope, ScanScope::Depth2, "深さ2まで");
+                });
+                if old_scope != self.scan_scope {
+                    self.save_settings_with_log();
+                }
+
+                ui.horizontal(|ui| {
+                    if ui.button("スキャン実行").clicked() {
+                        self.scan_repositories();
+                    }
+                    if ui.button("設定保存").clicked() {
+                        self.save_settings_with_log();
+                    }
+                });
+
+                ui.separator();
+                ui.label("候補プロジェクト一覧");
+                if self.scan_results.is_empty() {
+                    ui.label("候補なし（スキャン実行を押してください）");
+                } else {
+                    ScrollArea::vertical()
+                        .id_salt("project_candidate_scroll")
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            let mut clicked_index = None;
+                            for (index, candidate) in self.scan_results.iter().enumerate() {
+                                let selected = self.selected_scan_index == Some(index);
+                                let label = format!(
+                                    "{} | {} | {} | {}",
+                                    candidate.folder_name,
+                                    candidate.path.display(),
+                                    candidate.current_branch,
+                                    candidate.last_commit_datetime
+                                );
+                                if ui.selectable_label(selected, label).clicked() {
+                                    clicked_index = Some(index);
+                                }
+                            }
+                            if let Some(index) = clicked_index {
+                                self.selected_scan_index = Some(index);
+                            }
+                        });
+                }
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(self.selected_scan_index.is_some(), Button::new("選択確定"))
+                        .clicked()
+                        && self.confirm_selected_repo()
+                    {
+                        close_requested = true;
+                    }
+                    if ui.button("閉じる").clicked() {
+                        close_requested = true;
+                    }
                 });
             });
-            ui.collapsing("JSON", |ui| {
-                ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-                    ui.code(&self.material_json);
-                });
-            });
+
+        if close_requested {
+            open = false;
         }
+        self.show_project_change_dialog = open;
     }
 
     fn render_logs(&self, ui: &mut egui::Ui) {
         ui.separator();
         ui.label("ログ");
-        ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
-            for line in self.logs.iter().rev().take(80) {
-                ui.label(line);
-            }
-        });
+        ScrollArea::vertical()
+            .id_salt("app_log_scroll")
+            .max_height(160.0)
+            .show(ui, |ui| {
+                for line in self.logs.iter().rev().take(80) {
+                    ui.label(line);
+                }
+            });
     }
 
     fn status_color(&self) -> Color32 {
@@ -339,6 +464,51 @@ impl CodexRollbackBridgeApp {
             AppStatus::Selected => Color32::from_rgb(0, 96, 0),
             AppStatus::Updating => Color32::from_rgb(128, 96, 0),
             AppStatus::Error => Color32::from_rgb(160, 0, 0),
+        }
+    }
+
+    fn dirty_indicator(&self) -> (String, Color32) {
+        match &self.snapshot {
+            Some(snapshot) if snapshot.dirty => (
+                format!("dirty: {}", snapshot.dirty),
+                Color32::from_rgb(160, 0, 0),
+            ),
+            Some(snapshot) => (
+                format!("dirty: {}", snapshot.dirty),
+                Color32::from_rgb(0, 96, 0),
+            ),
+            None => ("dirty: -".to_string(), Color32::from_rgb(64, 64, 64)),
+        }
+    }
+
+    fn commit_state_label(&self, snapshot: &RepoSnapshot, full_id: &str) -> &'static str {
+        let is_head = snapshot.head_full_id == full_id;
+        let is_target = self
+            .selected_target_commit
+            .as_deref()
+            .map(|target| target == full_id)
+            .unwrap_or(false);
+
+        match (is_head, is_target) {
+            (true, true) => "HEAD/TARGET",
+            (true, false) => "HEAD",
+            (false, true) => "TARGET",
+            (false, false) => "",
+        }
+    }
+
+    fn pick_root_folder(&mut self) {
+        let mut dialog = rfd::FileDialog::new();
+        let current = PathBuf::from(self.root_folder_input.trim());
+        if current.is_dir() {
+            dialog = dialog.set_directory(current);
+        }
+
+        if let Some(folder) = dialog.pick_folder() {
+            self.root_folder_input = folder.to_string_lossy().to_string();
+            self.scan_results.clear();
+            self.selected_scan_index = None;
+            self.save_settings_with_log();
         }
     }
 
@@ -372,61 +542,21 @@ impl CodexRollbackBridgeApp {
         }
     }
 
-    fn confirm_selected_repo(&mut self) {
+    fn confirm_selected_repo(&mut self) -> bool {
         let Some(index) = self.selected_scan_index else {
             self.last_error = Some("候補プロジェクト未選択".to_string());
-            return;
+            return false;
         };
         let Some(candidate) = self.scan_results.get(index) else {
             self.last_error = Some("候補プロジェクトの参照に失敗しました".to_string());
-            return;
+            return false;
         };
         self.set_selected_repo(candidate.path.clone());
-    }
-
-    fn clear_selected_repo(&mut self) {
-        self.selected_repo_path = None;
-        self.selected_target_commit = None;
-        self.snapshot = None;
-        self.material_text.clear();
-        self.material_json.clear();
-        self.material_kind.clear();
-        self.app_status = AppStatus::ProjectUnselected;
-        self.last_error = None;
-        self.save_settings_with_log();
-    }
-
-    fn confirm_direct_repo_input(&mut self) {
-        let repo_path_text = self.direct_repo_input.trim();
-        if repo_path_text.is_empty() {
-            self.last_error = Some("リポジトリパスが未入力です".to_string());
-            return;
-        }
-
-        let repo_path = PathBuf::from(repo_path_text);
-        if !repo_path.is_dir() {
-            self.last_error = Some(format!(
-                "リポジトリパスが不正です: {}",
-                repo_path.to_string_lossy()
-            ));
-            return;
-        }
-
-        if !git::is_git_repo(&repo_path) {
-            self.last_error = Some(format!(
-                "Gitリポジトリではありません (.git が必要): {}",
-                repo_path.to_string_lossy()
-            ));
-            self.log("直接選択失敗: Gitリポジトリ判定に失敗");
-            return;
-        }
-
-        self.set_selected_repo(repo_path);
+        true
     }
 
     fn set_selected_repo(&mut self, repo_path: PathBuf) {
         self.selected_repo_path = Some(repo_path.clone());
-        self.direct_repo_input = repo_path.to_string_lossy().to_string();
         self.snapshot = None;
         self.selected_target_commit = None;
         self.material_text.clear();
@@ -434,9 +564,64 @@ impl CodexRollbackBridgeApp {
         self.material_kind.clear();
         self.app_status = AppStatus::Updating;
         self.last_error = None;
+        self.copy_feedback = None;
 
         self.monitor.send(MonitorCommand::SetRepo(repo_path));
         self.save_settings_with_log();
+    }
+
+    fn copy_commit_instruction(&mut self) {
+        let Some(snapshot) = self.snapshot.clone() else {
+            self.set_copy_feedback("監視データ未取得のため生成できません", true);
+            self.log("コミット命令生成失敗: 監視データ未取得");
+            return;
+        };
+
+        let Some(target_full_id) = self.selected_target_commit.clone() else {
+            self.set_copy_feedback("ターゲットコミット未選択", true);
+            self.log("コミット命令生成失敗: ターゲットコミット未選択");
+            return;
+        };
+
+        let Some(target_commit) = snapshot
+            .recent_commits
+            .iter()
+            .find(|commit| commit.full_id == target_full_id)
+        else {
+            self.set_copy_feedback(
+                "選択中ターゲットが最新一覧に存在しません。再選択してください",
+                true,
+            );
+            self.log("コミット命令生成失敗: ターゲットがコミット一覧に存在しない");
+            return;
+        };
+
+        let instruction = command_template::build_codex_instruction(
+            &snapshot,
+            &target_full_id,
+            &target_commit.message,
+        );
+
+        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(instruction)) {
+            Ok(()) => {
+                self.last_error = None;
+                self.set_copy_feedback("コミット命令をクリップボードにコピーしました", false);
+                self.log("コミット命令コピー成功");
+            }
+            Err(err) => {
+                let message = format!("クリップボードコピー失敗: {err}");
+                self.last_error = Some(message.clone());
+                self.set_copy_feedback(message.clone(), true);
+                self.log(format!("コミット命令コピー失敗: {err}"));
+            }
+        }
+    }
+
+    fn set_copy_feedback(&mut self, message: impl Into<String>, is_error: bool) {
+        self.copy_feedback = Some(CopyFeedback {
+            message: message.into(),
+            is_error,
+        });
     }
 
     fn generate_material(&mut self, detailed: bool) {
@@ -525,13 +710,13 @@ impl eframe::App for CodexRollbackBridgeApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.selected_repo_path.is_some() {
-                self.render_main_screen(ui);
-            } else {
-                self.render_project_selection(ui);
-            }
+            self.render_main_content(ui);
             self.render_logs(ui);
         });
+
+        if self.show_project_change_dialog {
+            self.render_project_change_dialog(ctx);
+        }
 
         ctx.request_repaint_after(Duration::from_millis(200));
     }

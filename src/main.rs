@@ -1,4 +1,5 @@
 mod app;
+mod command_template;
 mod config;
 mod font;
 mod git;
