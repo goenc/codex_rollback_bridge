@@ -131,17 +131,16 @@ impl CodexRollbackBridgeApp {
 
     fn render_top_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.heading("Codex Rollback Bridge");
-            ui.separator();
+            if ui.button("プロジェクト変更").clicked() {
+                self.show_project_change_dialog = true;
+            }
             let current_project = self
                 .selected_repo_path
                 .as_ref()
                 .map(|path| path.to_string_lossy().to_string())
                 .unwrap_or_else(|| "(未選択)".to_string());
+            ui.separator();
             ui.label(format!("現在プロジェクト: {current_project}"));
-            if ui.button("プロジェクト変更").clicked() {
-                self.show_project_change_dialog = true;
-            }
         });
 
         ui.horizontal_wrapped(|ui| {
@@ -236,7 +235,10 @@ impl CodexRollbackBridgeApp {
         };
         ui.colored_label(
             dirty_color,
-            format!("作業ツリー変更(dirty): {}", snapshot.dirty),
+            format!(
+                "作業ツリー変更: {}",
+                Self::dirty_status_text(snapshot.dirty)
+            ),
         );
     }
 
@@ -473,18 +475,28 @@ impl CodexRollbackBridgeApp {
     fn dirty_indicator(&self) -> (String, Color32) {
         match &self.snapshot {
             Some(snapshot) if snapshot.dirty => (
-                format!("作業ツリー変更(dirty): {}", snapshot.dirty),
+                format!(
+                    "作業ツリー変更: {}",
+                    Self::dirty_status_text(snapshot.dirty)
+                ),
                 Color32::from_rgb(160, 0, 0),
             ),
             Some(snapshot) => (
-                format!("作業ツリー変更(dirty): {}", snapshot.dirty),
+                format!(
+                    "作業ツリー変更: {}",
+                    Self::dirty_status_text(snapshot.dirty)
+                ),
                 Color32::from_rgb(0, 96, 0),
             ),
             None => (
-                "作業ツリー変更(dirty): -".to_string(),
+                "作業ツリー変更: -".to_string(),
                 Color32::from_rgb(64, 64, 64),
             ),
         }
+    }
+
+    fn dirty_status_text(dirty: bool) -> &'static str {
+        if dirty { "変更中" } else { "変更なし" }
     }
 
     fn commit_state_label(&self, snapshot: &RepoSnapshot, full_id: &str) -> &'static str {
