@@ -1,17 +1,7 @@
 use crate::models::{CommitInfo, RepoCandidate, RepoSnapshot, ScanScope};
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-#[derive(Debug, Clone)]
-pub struct DetailedGitData {
-    pub status_full: String,
-    pub diff_unstaged: String,
-    pub diff_staged: String,
-    pub diff_target_to_head: String,
-    pub changed_files: Vec<String>,
-}
 
 pub fn git_exists() -> bool {
     Command::new("git")
@@ -85,27 +75,6 @@ pub fn fetch_snapshot(
         status_porcelain,
         recent_commits,
         consecutive_update_failures: 0,
-    })
-}
-
-pub fn collect_detailed_git_data(
-    repo_path: &Path,
-    target_full_id: &str,
-) -> Result<DetailedGitData, String> {
-    let status_full = run_git(repo_path, &["status"])?;
-    let diff_unstaged = run_git(repo_path, &["diff"])?;
-    let diff_staged = run_git(repo_path, &["diff", "--staged"])?;
-    let range = format!("{target_full_id}..HEAD");
-    let diff_target_to_head = run_git(repo_path, &["diff", range.as_str()])?;
-
-    let changed_files = collect_changed_files(repo_path, range.as_str())?;
-
-    Ok(DetailedGitData {
-        status_full,
-        diff_unstaged,
-        diff_staged,
-        diff_target_to_head,
-        changed_files,
     })
 }
 
@@ -209,25 +178,6 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
     }
 
     Ok(commits)
-}
-
-fn collect_changed_files(repo_path: &Path, target_range: &str) -> Result<Vec<String>, String> {
-    let mut files = BTreeSet::new();
-
-    for output in [
-        run_git(repo_path, &["diff", "--name-only"])?,
-        run_git(repo_path, &["diff", "--name-only", "--staged"])?,
-        run_git(repo_path, &["diff", "--name-only", target_range])?,
-    ] {
-        for line in output.lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                files.insert(trimmed.to_string());
-            }
-        }
-    }
-
-    Ok(files.into_iter().collect())
 }
 
 fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {

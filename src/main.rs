@@ -3,7 +3,6 @@ mod command_template;
 mod config;
 mod font;
 mod git;
-mod material;
 mod models;
 mod monitor;
 mod paths;

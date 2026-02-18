@@ -1,11 +1,10 @@
 use crate::command_template;
 use crate::config;
 use crate::git;
-use crate::material;
 use crate::models::{AppStatus, RepoCandidate, RepoSnapshot, ScanScope, Settings};
 use crate::monitor::{MonitorCommand, MonitorController, MonitorEvent};
 use eframe::egui::{self, Button, Color32, Grid, RichText, ScrollArea};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 struct CopyFeedback {
@@ -25,9 +24,6 @@ pub struct CodexRollbackBridgeApp {
     selected_repo_path: Option<PathBuf>,
     snapshot: Option<RepoSnapshot>,
     selected_target_commit: Option<String>,
-    material_text: String,
-    material_json: String,
-    material_kind: String,
     last_error: Option<String>,
     logs: Vec<String>,
     monitor: MonitorController,
@@ -67,9 +63,6 @@ impl CodexRollbackBridgeApp {
             selected_repo_path: selected_repo_path.clone(),
             snapshot: None,
             selected_target_commit: None,
-            material_text: String::new(),
-            material_json: String::new(),
-            material_kind: String::new(),
             last_error: None,
             logs: load_result.logs,
             monitor: MonitorController::new(settings.update_interval_sec),
@@ -210,8 +203,6 @@ impl CodexRollbackBridgeApp {
 
         ui.separator();
         self.render_commit_instruction_section(ui);
-        ui.separator();
-        self.render_material_section(ui);
     }
 
     fn render_commit_table(&mut self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
@@ -277,53 +268,6 @@ impl CodexRollbackBridgeApp {
                 ui.label(format!("選択ターゲット: {target}"));
             } else {
                 ui.colored_label(Color32::from_rgb(128, 96, 0), "ターゲットコミット未選択");
-            }
-        });
-    }
-
-    fn render_material_section(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing("素材生成（既存機能）", |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("最小素材生成").clicked() {
-                    self.generate_material(false);
-                }
-                if ui.button("詳細素材生成").clicked() {
-                    self.generate_material(true);
-                }
-            });
-
-            if !self.material_kind.is_empty() {
-                ui.separator();
-                ui.label(format!("生成種別: {}", self.material_kind));
-                ui.label(format!(
-                    "UTF-8バイト数 (テキスト/JSON): {}/{}",
-                    self.material_text.len(),
-                    self.material_json.len()
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("テキストをコピー").clicked() {
-                        ui.ctx().copy_text(self.material_text.clone());
-                    }
-                    if ui.button("JSONをコピー").clicked() {
-                        ui.ctx().copy_text(self.material_json.clone());
-                    }
-                });
-                ui.collapsing("人間向けテキスト", |ui| {
-                    ScrollArea::vertical()
-                        .id_salt("material_text_scroll")
-                        .max_height(220.0)
-                        .show(ui, |ui| {
-                            ui.code(&self.material_text);
-                        });
-                });
-                ui.collapsing("JSON", |ui| {
-                    ScrollArea::vertical()
-                        .id_salt("material_json_scroll")
-                        .max_height(220.0)
-                        .show(ui, |ui| {
-                            ui.code(&self.material_json);
-                        });
-                });
             }
         });
     }
@@ -549,9 +493,6 @@ impl CodexRollbackBridgeApp {
         self.selected_repo_path = Some(repo_path.clone());
         self.snapshot = None;
         self.selected_target_commit = None;
-        self.material_text.clear();
-        self.material_json.clear();
-        self.material_kind.clear();
         self.app_status = AppStatus::Updating;
         self.last_error = None;
         self.copy_feedback = None;
@@ -612,47 +553,6 @@ impl CodexRollbackBridgeApp {
             message: message.into(),
             is_error,
         });
-    }
-
-    fn generate_material(&mut self, detailed: bool) {
-        let Some(snapshot) = self.snapshot.clone() else {
-            self.last_error = Some("監視データ未取得".to_string());
-            return;
-        };
-
-        let Some(target_full_id) = self.selected_target_commit.clone() else {
-            self.last_error = Some("ターゲットコミット未選択".to_string());
-            self.log("素材生成失敗: ターゲットコミット未選択");
-            return;
-        };
-
-        let generated = if detailed {
-            material::generate_detailed(Path::new(&snapshot.repo_path), &snapshot, &target_full_id)
-        } else {
-            material::generate_minimal(&snapshot, &target_full_id)
-        };
-
-        match generated {
-            Ok(output) => {
-                self.material_text = output.text;
-                self.material_json = output.json;
-                self.material_kind = if detailed {
-                    if output.omitted_due_to_size {
-                        "詳細素材（容量超過で省略）".to_string()
-                    } else {
-                        "詳細素材".to_string()
-                    }
-                } else {
-                    "最小素材".to_string()
-                };
-                self.last_error = None;
-                self.log(format!("素材生成成功: {}", self.material_kind));
-            }
-            Err(err) => {
-                self.last_error = Some(err.clone());
-                self.log(format!("素材生成失敗: {err}"));
-            }
-        }
     }
 
     fn persist_settings(&mut self) -> Result<PathBuf, String> {
