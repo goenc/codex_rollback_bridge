@@ -1,0 +1,6 @@
+Font source:
+- URL: https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf
+- Upstream name: NotoSansJP[wght].ttf (variable font)
+- Local filename used by policy: NotoSansJP-Regular.ttf
+License:
+- SIL Open Font License 1.1 (see OFL.txt)
