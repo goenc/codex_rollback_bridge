@@ -1,6 +1,7 @@
 Git監視コミット支援アプリ
 
 # 要件定義
+target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 
 ## 0. ナレッジ参照
 - target_tags: `rust`, `eframe`, `egui`, `windows`, `git`, `gui`
@@ -367,3 +368,4 @@ Git監視コミット支援アプリ
 - 2026-02-19: コミット一覧を中央寄せにして左右余白を対称化し、ヘッダ余白を縮小して一覧を上寄せした。
 - 2026-02-19: 親ウィンドウ高さを560へ拡張し、ボタン枠線を2px濃色で統一した。
 - 2026-02-19: 設定保存先の表記を実装に合わせて `settings.override.json` へ統一した。
+- 2026-02-19: `# 要件定義` 直下に `target_project_root` を明示し、再開時コンテキストを固定した。
