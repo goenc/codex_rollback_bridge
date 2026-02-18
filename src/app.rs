@@ -13,7 +13,6 @@ struct CopyFeedback {
 }
 
 pub struct CodexRollbackBridgeApp {
-    project_root: PathBuf,
     settings: Settings,
     app_status: AppStatus,
     git_available: bool,
@@ -30,6 +29,7 @@ pub struct CodexRollbackBridgeApp {
     config_contract: String,
     consecutive_failures: u32,
     show_project_change_dialog: bool,
+    project_change_dialog_was_open: bool,
     copy_feedback: Option<CopyFeedback>,
 }
 
@@ -38,6 +38,7 @@ impl CodexRollbackBridgeApp {
         let load_result = config::load_settings(&project_root);
         let mut settings = load_result.settings;
         settings.normalize();
+        settings.scan_scope = ScanScope::Direct;
 
         let default_project_root_text = project_root.to_string_lossy().to_string();
         let root_folder_input = settings
@@ -52,12 +53,11 @@ impl CodexRollbackBridgeApp {
             .filter(|path| path.exists());
 
         let mut app = Self {
-            project_root,
             settings: settings.clone(),
             app_status: AppStatus::ProjectUnselected,
             git_available: git::git_exists(),
             root_folder_input,
-            scan_scope: settings.scan_scope,
+            scan_scope: ScanScope::Direct,
             scan_results: Vec::new(),
             selected_scan_index: None,
             selected_repo_path: selected_repo_path.clone(),
@@ -69,6 +69,7 @@ impl CodexRollbackBridgeApp {
             config_contract: config::config_contract_line(),
             consecutive_failures: 0,
             show_project_change_dialog: selected_repo_path.is_none(),
+            project_change_dialog_was_open: false,
             copy_feedback: None,
         };
 
@@ -348,35 +349,12 @@ impl CodexRollbackBridgeApp {
                     if ui.button("フォルダ選択").clicked() {
                         self.pick_root_folder();
                     }
-                    if ui.button("ワークスペース").clicked() {
-                        self.root_folder_input = self.project_root.to_string_lossy().to_string();
-                        self.save_settings_with_log();
-                    }
-                });
-
-                let old_scope = self.scan_scope;
-                ui.horizontal(|ui| {
-                    ui.label("スキャン範囲:");
-                    ui.radio_value(&mut self.scan_scope, ScanScope::Direct, "直下のみ");
-                    ui.radio_value(&mut self.scan_scope, ScanScope::Depth2, "深さ2まで");
-                });
-                if old_scope != self.scan_scope {
-                    self.save_settings_with_log();
-                }
-
-                ui.horizontal(|ui| {
-                    if ui.button("スキャン実行").clicked() {
-                        self.scan_repositories();
-                    }
-                    if ui.button("設定保存").clicked() {
-                        self.save_settings_with_log();
-                    }
                 });
 
                 ui.separator();
                 ui.label("候補プロジェクト一覧");
                 if self.scan_results.is_empty() {
-                    ui.label("候補なし（スキャン実行を押してください）");
+                    ui.label("候補なし");
                 } else {
                     ScrollArea::vertical()
                         .id_salt("project_candidate_scroll")
@@ -471,10 +449,12 @@ impl CodexRollbackBridgeApp {
             self.scan_results.clear();
             self.selected_scan_index = None;
             self.save_settings_with_log();
+            self.scan_repositories();
         }
     }
 
     fn scan_repositories(&mut self) {
+        self.scan_scope = ScanScope::Direct;
         if !self.git_available {
             self.last_error = Some("git が見つかりません".to_string());
             return;
@@ -489,7 +469,7 @@ impl CodexRollbackBridgeApp {
             return;
         }
 
-        match git::scan_repositories(&root_path, self.scan_scope) {
+        match git::scan_repositories(&root_path, ScanScope::Direct) {
             Ok(results) => {
                 self.scan_results = results;
                 self.selected_scan_index = None;
@@ -602,6 +582,9 @@ impl CodexRollbackBridgeApp {
 impl eframe::App for CodexRollbackBridgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_monitor_events();
+        if self.show_project_change_dialog && !self.project_change_dialog_was_open {
+            self.scan_repositories();
+        }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             self.render_top_panel(ui);
@@ -614,6 +597,7 @@ impl eframe::App for CodexRollbackBridgeApp {
         if self.show_project_change_dialog {
             self.render_project_change_dialog(ctx);
         }
+        self.project_change_dialog_was_open = self.show_project_change_dialog;
 
         let _ = self.logs.len();
         ctx.request_repaint_after(Duration::from_millis(200));
