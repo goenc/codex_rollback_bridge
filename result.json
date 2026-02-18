@@ -3,7 +3,7 @@
   "os": "Microsoft Windows 10 Home 10.0.19045",
   "rustc_version": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
   "cargo_version": "cargo 1.93.1 (083ac5135 2025-12-15)",
-  "timestamp_utc": "2026-02-18T16:17:44.5372263Z",
+  "timestamp_utc": "2026-02-18T16:23:04.3168979Z",
   "config_policy_validation": "PASS",
   "executable_path": "target/debug/codex_rollback_bridge.exe",
   "font_policy": {
