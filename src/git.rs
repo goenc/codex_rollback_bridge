@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const GIT_DATE_FORMAT_ARG: &str = "--date=format:%Y/%m/%d %H:%M";
+
 pub fn git_exists() -> bool {
     Command::new("git")
         .arg("--version")
@@ -119,7 +121,7 @@ fn get_current_branch(repo_path: &Path) -> Result<String, String> {
 fn get_last_commit_datetime(repo_path: &Path) -> Result<String, String> {
     run_git(
         repo_path,
-        &["log", "-1", "--date=iso-strict", "--pretty=format:%cd"],
+        &["log", "-1", GIT_DATE_FORMAT_ARG, "--pretty=format:%cd"],
     )
 }
 
@@ -129,7 +131,7 @@ fn get_head_info(repo_path: &Path) -> Result<(String, String, String), String> {
         &[
             "log",
             "-1",
-            "--date=iso-strict",
+            GIT_DATE_FORMAT_ARG,
             "--pretty=format:%H%n%s%n%cd",
         ],
     )?;
@@ -154,7 +156,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
             "log",
             "-n",
             max_count_arg.as_str(),
-            "--date=iso-strict",
+            GIT_DATE_FORMAT_ARG,
             "--pretty=format:%H%x1f%h%x1f%cd%x1f%s",
         ],
     )?;

@@ -3,7 +3,7 @@ use crate::config;
 use crate::git;
 use crate::models::{AppStatus, RepoCandidate, RepoSnapshot, ScanScope, Settings};
 use crate::monitor::{MonitorCommand, MonitorController, MonitorEvent};
-use eframe::egui::{self, Button, Color32, Grid, RichText, ScrollArea};
+use eframe::egui::{self, Button, Color32, Frame, Grid, RichText, ScrollArea, Sense, Stroke};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -202,11 +202,16 @@ impl CodexRollbackBridgeApp {
         }
 
         ui.separator();
-        self.render_commit_instruction_section(ui);
+        self.render_rollback_section(ui);
     }
 
     fn render_commit_table(&mut self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
         ui.label("コミット一覧（最大50）");
+
+        let total_width = ui.available_width().max(640.0);
+        let datetime_width = 160.0;
+        let short_id_width = 96.0;
+        let message_width = (total_width - datetime_width - short_id_width).max(240.0);
 
         let mut clicked_target: Option<String> = None;
         ScrollArea::vertical()
@@ -214,34 +219,44 @@ impl CodexRollbackBridgeApp {
             .max_height(280.0)
             .show(ui, |ui| {
                 Grid::new("commit_table_grid")
-                    .num_columns(4)
-                    .striped(true)
+                    .num_columns(3)
+                    .spacing(egui::vec2(0.0, 0.0))
                     .show(ui, |ui| {
-                        ui.strong("日時");
-                        ui.strong("短縮ID");
-                        ui.strong("メッセージ");
-                        ui.strong("状態");
+                        self.render_table_header_cell(ui, "日時", datetime_width);
+                        self.render_table_header_cell(ui, "短縮ID", short_id_width);
+                        self.render_table_header_cell(ui, "メッセージ", message_width);
                         ui.end_row();
 
                         for commit in snapshot.recent_commits.iter().take(50) {
-                            let is_target = self
+                            let is_selected = self
                                 .selected_target_commit
                                 .as_deref()
                                 .map(|id| id == commit.full_id)
                                 .unwrap_or(false);
 
-                            let datetime_text = if is_target {
-                                RichText::new(&commit.datetime).strong()
-                            } else {
-                                RichText::new(&commit.datetime)
-                            };
+                            let mut row_clicked = false;
+                            row_clicked |= self.render_table_selectable_cell(
+                                ui,
+                                &commit.datetime,
+                                is_selected,
+                                datetime_width,
+                            );
+                            row_clicked |= self.render_table_selectable_cell(
+                                ui,
+                                &commit.short_id,
+                                is_selected,
+                                short_id_width,
+                            );
+                            row_clicked |= self.render_table_selectable_cell(
+                                ui,
+                                &commit.message,
+                                is_selected,
+                                message_width,
+                            );
 
-                            if ui.selectable_label(is_target, datetime_text).clicked() {
+                            if row_clicked {
                                 clicked_target = Some(commit.full_id.clone());
                             }
-                            ui.label(&commit.short_id);
-                            ui.label(&commit.message);
-                            ui.label(self.commit_state_label(snapshot, &commit.full_id));
                             ui.end_row();
                         }
                     });
@@ -253,22 +268,57 @@ impl CodexRollbackBridgeApp {
         }
     }
 
-    fn render_commit_instruction_section(&mut self, ui: &mut egui::Ui) {
-        let can_generate = self.snapshot.is_some() && self.selected_target_commit.is_some();
+    fn render_table_header_cell(&self, ui: &mut egui::Ui, text: &str, width: f32) {
+        Frame::NONE
+            .fill(Color32::from_rgb(236, 236, 236))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(120, 120, 120)))
+            .show(ui, |ui| {
+                ui.add_sized(
+                    [width, 26.0],
+                    egui::Label::new(RichText::new(text).strong()).truncate(),
+                );
+            });
+    }
+
+    fn render_table_selectable_cell(
+        &self,
+        ui: &mut egui::Ui,
+        text: &str,
+        selected: bool,
+        width: f32,
+    ) -> bool {
+        let fill_color = if selected {
+            Color32::from_rgb(255, 232, 238)
+        } else {
+            Color32::from_rgb(252, 252, 252)
+        };
+        Frame::NONE
+            .fill(fill_color)
+            .stroke(Stroke::new(1.0, Color32::from_rgb(144, 144, 144)))
+            .show(ui, |ui| {
+                let response = ui.add_sized(
+                    [width, 24.0],
+                    egui::Label::new(RichText::new(text))
+                        .sense(Sense::click())
+                        .truncate(),
+                );
+                response.clicked()
+            })
+            .inner
+    }
+
+    fn render_rollback_section(&mut self, ui: &mut egui::Ui) {
+        let can_generate = self.snapshot.is_some();
 
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(can_generate, Button::new("コミット命令"))
+                .add_enabled(can_generate, Button::new("ロールバック"))
                 .clicked()
             {
-                self.copy_commit_instruction();
+                self.copy_rollback_instruction();
             }
 
-            if let Some(target) = &self.selected_target_commit {
-                ui.label(format!("選択ターゲット: {target}"));
-            } else {
-                ui.colored_label(Color32::from_rgb(128, 96, 0), "ターゲットコミット未選択");
-            }
+            ui.label("ロールバック対象: HEAD固定");
         });
     }
 
@@ -366,19 +416,6 @@ impl CodexRollbackBridgeApp {
         self.show_project_change_dialog = open;
     }
 
-    fn render_logs(&self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.label("ログ");
-        ScrollArea::vertical()
-            .id_salt("app_log_scroll")
-            .max_height(160.0)
-            .show(ui, |ui| {
-                for line in self.logs.iter().rev().take(80) {
-                    ui.label(line);
-                }
-            });
-    }
-
     fn status_color(&self) -> Color32 {
         match self.app_status {
             AppStatus::ProjectUnselected => Color32::from_rgb(0, 0, 0),
@@ -413,22 +450,6 @@ impl CodexRollbackBridgeApp {
 
     fn dirty_status_text(dirty: bool) -> &'static str {
         if dirty { "変更中" } else { "変更なし" }
-    }
-
-    fn commit_state_label(&self, snapshot: &RepoSnapshot, full_id: &str) -> &'static str {
-        let is_head = snapshot.head_full_id == full_id;
-        let is_target = self
-            .selected_target_commit
-            .as_deref()
-            .map(|target| target == full_id)
-            .unwrap_or(false);
-
-        match (is_head, is_target) {
-            (true, true) => "HEAD/TARGET",
-            (true, false) => "HEAD",
-            (false, true) => "TARGET",
-            (false, false) => "",
-        }
     }
 
     fn pick_root_folder(&mut self) {
@@ -501,49 +522,29 @@ impl CodexRollbackBridgeApp {
         self.save_settings_with_log();
     }
 
-    fn copy_commit_instruction(&mut self) {
+    fn copy_rollback_instruction(&mut self) {
         let Some(snapshot) = self.snapshot.clone() else {
             self.set_copy_feedback("監視データ未取得のため生成できません", true);
-            self.log("コミット命令生成失敗: 監視データ未取得");
+            self.log("ロールバック文生成失敗: 監視データ未取得");
             return;
         };
 
-        let Some(target_full_id) = self.selected_target_commit.clone() else {
-            self.set_copy_feedback("ターゲットコミット未選択", true);
-            self.log("コミット命令生成失敗: ターゲットコミット未選択");
-            return;
-        };
-
-        let Some(target_commit) = snapshot
-            .recent_commits
-            .iter()
-            .find(|commit| commit.full_id == target_full_id)
-        else {
-            self.set_copy_feedback(
-                "選択中ターゲットが最新一覧に存在しません。再選択してください",
-                true,
-            );
-            self.log("コミット命令生成失敗: ターゲットがコミット一覧に存在しない");
-            return;
-        };
-
-        let instruction = command_template::build_codex_instruction(
-            &snapshot,
-            &target_full_id,
-            &target_commit.message,
-        );
+        let instruction = command_template::build_codex_instruction(&snapshot);
 
         match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(instruction)) {
             Ok(()) => {
                 self.last_error = None;
-                self.set_copy_feedback("コミット命令をクリップボードにコピーしました", false);
-                self.log("コミット命令コピー成功");
+                self.set_copy_feedback(
+                    "HEAD固定のロールバック文をクリップボードにコピーしました",
+                    false,
+                );
+                self.log("ロールバック文コピー成功");
             }
             Err(err) => {
                 let message = format!("クリップボードコピー失敗: {err}");
                 self.last_error = Some(message.clone());
                 self.set_copy_feedback(message.clone(), true);
-                self.log(format!("コミット命令コピー失敗: {err}"));
+                self.log(format!("ロールバック文コピー失敗: {err}"));
             }
         }
     }
@@ -601,13 +602,13 @@ impl eframe::App for CodexRollbackBridgeApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_main_content(ui);
-            self.render_logs(ui);
         });
 
         if self.show_project_change_dialog {
             self.render_project_change_dialog(ctx);
         }
 
+        let _ = self.logs.len();
         ctx.request_repaint_after(Duration::from_millis(200));
     }
 }
