@@ -233,24 +233,28 @@ impl CodexRollbackBridgeApp {
                                 .as_deref()
                                 .map(|id| id == commit.full_id)
                                 .unwrap_or(false);
+                            let is_head = snapshot.head_full_id == commit.full_id;
 
                             let mut row_clicked = false;
                             row_clicked |= self.render_table_selectable_cell(
                                 ui,
                                 &commit.datetime,
                                 is_selected,
+                                is_head,
                                 datetime_width,
                             );
                             row_clicked |= self.render_table_selectable_cell(
                                 ui,
                                 &commit.short_id,
                                 is_selected,
+                                is_head,
                                 short_id_width,
                             );
                             row_clicked |= self.render_table_selectable_cell(
                                 ui,
                                 &commit.message,
                                 is_selected,
+                                is_head,
                                 message_width,
                             );
 
@@ -285,10 +289,13 @@ impl CodexRollbackBridgeApp {
         ui: &mut egui::Ui,
         text: &str,
         selected: bool,
+        is_head: bool,
         width: f32,
     ) -> bool {
         let fill_color = if selected {
-            Color32::from_rgb(255, 232, 238)
+            Color32::from_rgb(236, 236, 236)
+        } else if is_head {
+            Color32::from_rgb(228, 245, 228)
         } else {
             Color32::from_rgb(252, 252, 252)
         };
