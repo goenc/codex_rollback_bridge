@@ -83,6 +83,5 @@ pub struct RepoSnapshot {
     pub dirty: bool,
     pub status_porcelain: String,
     pub recent_commits: Vec<CommitInfo>,
-    pub head_changed: bool,
     pub consecutive_update_failures: u32,
 }

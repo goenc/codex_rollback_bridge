@@ -84,7 +84,6 @@ pub fn fetch_snapshot(
         dirty,
         status_porcelain,
         recent_commits,
-        head_changed,
         consecutive_update_failures: 0,
     })
 }

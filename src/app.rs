@@ -203,8 +203,6 @@ impl CodexRollbackBridgeApp {
         }
 
         if let Some(snapshot) = self.snapshot.clone() {
-            self.render_snapshot_summary(ui, &snapshot);
-            ui.separator();
             self.render_commit_table(ui, &snapshot);
         } else {
             ui.label("監視データ未取得（更新待ち）");
@@ -214,32 +212,6 @@ impl CodexRollbackBridgeApp {
         self.render_commit_instruction_section(ui);
         ui.separator();
         self.render_material_section(ui);
-    }
-
-    fn render_snapshot_summary(&self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("現在ブランチ: {}", snapshot.current_branch));
-            ui.separator();
-            ui.label(format!("現在HEAD: {}", snapshot.head_full_id));
-            ui.separator();
-            ui.label(format!("HEAD日時: {}", snapshot.head_datetime));
-            ui.separator();
-            ui.label(format!("HEAD変更検出: {}", snapshot.head_changed));
-        });
-        ui.label(format!("HEADメッセージ: {}", snapshot.head_message));
-
-        let dirty_color = if snapshot.dirty {
-            Color32::from_rgb(160, 0, 0)
-        } else {
-            Color32::from_rgb(0, 96, 0)
-        };
-        ui.colored_label(
-            dirty_color,
-            format!(
-                "作業ツリー変更: {}",
-                Self::dirty_status_text(snapshot.dirty)
-            ),
-        );
     }
 
     fn render_commit_table(&mut self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
