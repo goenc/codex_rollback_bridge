@@ -124,7 +124,7 @@ impl CodexRollbackBridgeApp {
     }
 
     fn render_top_panel(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
+        ui.add_space(2.0);
 
         ui.horizontal_wrapped(|ui| {
             if ui.button("プロジェクト変更").clicked() {
@@ -139,7 +139,7 @@ impl CodexRollbackBridgeApp {
             ui.label(format!("現在プロジェクト: {current_project}"));
         });
 
-        ui.add_space(6.0);
+        ui.add_space(4.0);
 
         ui.horizontal_wrapped(|ui| {
             ui.label("更新間隔(秒):");
@@ -193,9 +193,9 @@ impl CodexRollbackBridgeApp {
             ui.colored_label(color, &feedback.message);
         }
 
-        ui.add_space(8.0);
-        ui.separator();
         ui.add_space(2.0);
+        ui.separator();
+        ui.add_space(0.0);
     }
 
     fn render_main_content(&mut self, ui: &mut egui::Ui) {
@@ -215,18 +215,26 @@ impl CodexRollbackBridgeApp {
     }
 
     fn render_commit_table(&mut self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
-        ui.label("コミット一覧（最大50）");
+        const COMMIT_TABLE_SLOTS: usize = 10;
+        let available_width = ui.available_width();
+        let table_width = if available_width >= 640.0 {
+            available_width.min(940.0)
+        } else {
+            available_width
+        };
+        let side_margin = ((available_width - table_width) * 0.5).max(0.0);
 
-        let total_width = ui.available_width().max(640.0);
         let datetime_width = 160.0;
         let short_id_width = 96.0;
-        let message_width = (total_width - datetime_width - short_id_width).max(240.0);
+        let message_width = (table_width - datetime_width - short_id_width).max(240.0);
 
-        let mut clicked_target: Option<String> = None;
-        ScrollArea::vertical()
-            .id_salt("commit_table_scroll")
-            .max_height(280.0)
-            .show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(side_margin);
+            ui.vertical(|ui| {
+                ui.set_width(table_width);
+                ui.label("コミット一覧（10枠固定）");
+
+                let mut clicked_target: Option<String> = None;
                 Grid::new("commit_table_grid")
                     .num_columns(3)
                     .spacing(egui::vec2(0.0, 0.0))
@@ -236,49 +244,57 @@ impl CodexRollbackBridgeApp {
                         self.render_table_header_cell(ui, "メッセージ", message_width);
                         ui.end_row();
 
-                        for commit in snapshot.recent_commits.iter().take(50) {
-                            let is_selected = self
-                                .selected_target_commit
-                                .as_deref()
-                                .map(|id| id == commit.full_id)
-                                .unwrap_or(false);
-                            let is_head = snapshot.head_full_id == commit.full_id;
+                        for row_index in 0..COMMIT_TABLE_SLOTS {
+                            if let Some(commit) = snapshot.recent_commits.get(row_index) {
+                                let is_selected = self
+                                    .selected_target_commit
+                                    .as_deref()
+                                    .map(|id| id == commit.full_id)
+                                    .unwrap_or(false);
+                                let is_head = snapshot.head_full_id == commit.full_id;
 
-                            let mut row_clicked = false;
-                            row_clicked |= self.render_table_selectable_cell(
-                                ui,
-                                &commit.datetime,
-                                is_selected,
-                                is_head,
-                                datetime_width,
-                            );
-                            row_clicked |= self.render_table_selectable_cell(
-                                ui,
-                                &commit.short_id,
-                                is_selected,
-                                is_head,
-                                short_id_width,
-                            );
-                            row_clicked |= self.render_table_selectable_cell(
-                                ui,
-                                &commit.message,
-                                is_selected,
-                                is_head,
-                                message_width,
-                            );
+                                let mut row_clicked = false;
+                                row_clicked |= self.render_table_selectable_cell(
+                                    ui,
+                                    &commit.datetime,
+                                    is_selected,
+                                    is_head,
+                                    datetime_width,
+                                );
+                                row_clicked |= self.render_table_selectable_cell(
+                                    ui,
+                                    &commit.short_id,
+                                    is_selected,
+                                    is_head,
+                                    short_id_width,
+                                );
+                                row_clicked |= self.render_table_selectable_cell(
+                                    ui,
+                                    &commit.message,
+                                    is_selected,
+                                    is_head,
+                                    message_width,
+                                );
 
-                            if row_clicked {
-                                clicked_target = Some(commit.full_id.clone());
+                                if row_clicked {
+                                    clicked_target = Some(commit.full_id.clone());
+                                }
+                            } else {
+                                self.render_table_empty_cell(ui, datetime_width);
+                                self.render_table_empty_cell(ui, short_id_width);
+                                self.render_table_empty_cell(ui, message_width);
                             }
                             ui.end_row();
                         }
                     });
-            });
 
-        if let Some(target) = clicked_target {
-            self.selected_target_commit = Some(target);
-            self.copy_feedback = None;
-        }
+                if let Some(target) = clicked_target {
+                    self.selected_target_commit = Some(target);
+                    self.copy_feedback = None;
+                }
+            });
+            ui.add_space(side_margin);
+        });
     }
 
     fn render_table_header_cell(&self, ui: &mut egui::Ui, text: &str, width: f32) {
@@ -321,6 +337,15 @@ impl CodexRollbackBridgeApp {
                 response.clicked()
             })
             .inner
+    }
+
+    fn render_table_empty_cell(&self, ui: &mut egui::Ui, width: f32) {
+        Frame::NONE
+            .fill(Color32::from_rgb(252, 252, 252))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(144, 144, 144)))
+            .show(ui, |ui| {
+                ui.add_sized([width, 24.0], egui::Label::new(""));
+            });
     }
 
     fn render_rollback_section(&mut self, ui: &mut egui::Ui) {
@@ -690,9 +715,11 @@ impl eframe::App for CodexRollbackBridgeApp {
         self.poll_monitor_events();
         let was_dialog_open = self.project_change_dialog_was_open;
 
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            self.render_top_panel(ui);
-        });
+        egui::TopBottomPanel::top("top_panel")
+            .show_separator_line(false)
+            .show(ctx, |ui| {
+                self.render_top_panel(ui);
+            });
 
         if self.show_project_change_dialog && !was_dialog_open {
             self.scan_repositories();

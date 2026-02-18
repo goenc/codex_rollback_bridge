@@ -14,7 +14,7 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_resizable(false)
-            .with_inner_size([1000.0, 500.0]),
+            .with_inner_size([1000.0, 560.0]),
         ..Default::default()
     };
 
@@ -37,6 +37,7 @@ fn apply_readable_light_theme(ctx: &eframe::egui::Context) {
     let strong_text = eframe::egui::Color32::from_rgb(8, 8, 8);
     let weak_text = eframe::egui::Color32::from_rgb(56, 56, 56);
     let panel_bg = eframe::egui::Color32::from_gray(248);
+    let button_border = eframe::egui::Color32::from_rgb(51, 51, 51);
 
     ctx.set_theme(eframe::egui::Theme::Light);
     ctx.style_mut_of(eframe::egui::Theme::Light, |style| {
@@ -57,6 +58,15 @@ fn apply_readable_light_theme(ctx: &eframe::egui::Context) {
         style.visuals.window_fill = panel_bg;
         style.visuals.panel_fill = panel_bg;
         style.visuals.extreme_bg_color = eframe::egui::Color32::from_gray(255);
+        style.visuals.widgets.inactive.bg_stroke = eframe::egui::Stroke::new(2.0, button_border);
+        style.visuals.widgets.hovered.bg_stroke = eframe::egui::Stroke::new(2.0, button_border);
+        style.visuals.widgets.active.bg_stroke = eframe::egui::Stroke::new(2.0, button_border);
+        style.visuals.widgets.open.bg_stroke = eframe::egui::Stroke::new(2.0, button_border);
+        style.visuals.widgets.inactive.corner_radius = eframe::egui::CornerRadius::same(4);
+        style.visuals.widgets.hovered.corner_radius = eframe::egui::CornerRadius::same(4);
+        style.visuals.widgets.active.corner_radius = eframe::egui::CornerRadius::same(4);
+        style.visuals.widgets.open.corner_radius = eframe::egui::CornerRadius::same(4);
+        style.spacing.interact_size.y = style.spacing.interact_size.y.max(32.0);
     });
 }
 
