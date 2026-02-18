@@ -13,6 +13,7 @@ pub struct CodexRollbackBridgeApp {
     app_status: AppStatus,
     git_available: bool,
     root_folder_input: String,
+    direct_repo_input: String,
     scan_scope: ScanScope,
     scan_results: Vec<RepoCandidate>,
     selected_scan_index: Option<usize>,
@@ -25,15 +26,20 @@ pub struct CodexRollbackBridgeApp {
     last_error: Option<String>,
     logs: Vec<String>,
     monitor: MonitorController,
-    font_validation: Result<PathBuf, String>,
     config_contract: String,
 }
 
 impl CodexRollbackBridgeApp {
-    pub fn new(project_root: PathBuf, font_validation: Result<PathBuf, String>) -> Self {
+    pub fn new(project_root: PathBuf, _font_validation: Result<PathBuf, String>) -> Self {
         let load_result = config::load_settings(&project_root);
         let mut settings = load_result.settings;
         settings.normalize();
+
+        let default_project_root_text = project_root.to_string_lossy().to_string();
+        let root_folder_input = settings
+            .root_folder_path
+            .clone()
+            .unwrap_or_else(|| default_project_root_text.clone());
 
         let selected_repo_path = settings
             .selected_repo_path
@@ -46,7 +52,11 @@ impl CodexRollbackBridgeApp {
             settings: settings.clone(),
             app_status: AppStatus::ProjectUnselected,
             git_available: git::git_exists(),
-            root_folder_input: settings.root_folder_path.unwrap_or_default(),
+            root_folder_input,
+            direct_repo_input: settings
+                .selected_repo_path
+                .clone()
+                .unwrap_or(default_project_root_text),
             scan_scope: settings.scan_scope,
             scan_results: Vec::new(),
             selected_scan_index: None,
@@ -59,7 +69,6 @@ impl CodexRollbackBridgeApp {
             last_error: None,
             logs: load_result.logs,
             monitor: MonitorController::new(settings.update_interval_sec),
-            font_validation,
             config_contract: config::config_contract_line(),
         };
 
@@ -124,15 +133,6 @@ impl CodexRollbackBridgeApp {
         if let Some(error) = &self.last_error {
             ui.colored_label(Color32::RED, error);
         }
-
-        match &self.font_validation {
-            Ok(path) => {
-                ui.label(format!("font: {}", path.display()));
-            }
-            Err(err) => {
-                ui.colored_label(Color32::RED, format!("font error: {err}"));
-            }
-        }
     }
 
     fn render_project_selection(&mut self, ui: &mut egui::Ui) {
@@ -195,6 +195,19 @@ impl CodexRollbackBridgeApp {
 
         if ui.button("選択確定").clicked() {
             self.confirm_selected_repo();
+        }
+
+        ui.separator();
+        ui.label("直接選択");
+        ui.horizontal(|ui| {
+            ui.label("リポジトリ:");
+            ui.text_edit_singleline(&mut self.direct_repo_input);
+            if ui.button("このプロジェクト").clicked() {
+                self.direct_repo_input = self.project_root.to_string_lossy().to_string();
+            }
+        });
+        if ui.button("このパスを選択").clicked() {
+            self.confirm_direct_repo_input();
         }
     }
 
@@ -320,19 +333,6 @@ impl CodexRollbackBridgeApp {
         });
     }
 
-    fn apply_black_text_visuals(ui: &mut egui::Ui) {
-        let black = Color32::from_rgb(0, 0, 0);
-        let visuals = ui.visuals_mut();
-        visuals.override_text_color = Some(black);
-        visuals.weak_text_color = Some(black);
-        visuals.widgets.noninteractive.fg_stroke.color = black;
-        visuals.widgets.inactive.fg_stroke.color = black;
-        visuals.widgets.hovered.fg_stroke.color = black;
-        visuals.widgets.active.fg_stroke.color = black;
-        visuals.widgets.open.fg_stroke.color = black;
-        visuals.disabled_alpha = 1.0;
-    }
-
     fn status_color(&self) -> Color32 {
         match self.app_status {
             AppStatus::ProjectUnselected => Color32::from_rgb(0, 0, 0),
@@ -381,19 +381,7 @@ impl CodexRollbackBridgeApp {
             self.last_error = Some("候補プロジェクトの参照に失敗しました".to_string());
             return;
         };
-
-        self.selected_repo_path = Some(candidate.path.clone());
-        self.snapshot = None;
-        self.selected_target_commit = None;
-        self.material_text.clear();
-        self.material_json.clear();
-        self.material_kind.clear();
-        self.app_status = AppStatus::Updating;
-
-        if let Some(repo_path) = self.selected_repo_path.clone() {
-            self.monitor.send(MonitorCommand::SetRepo(repo_path));
-            self.save_settings_with_log();
-        }
+        self.set_selected_repo(candidate.path.clone());
     }
 
     fn clear_selected_repo(&mut self) {
@@ -405,6 +393,49 @@ impl CodexRollbackBridgeApp {
         self.material_kind.clear();
         self.app_status = AppStatus::ProjectUnselected;
         self.last_error = None;
+        self.save_settings_with_log();
+    }
+
+    fn confirm_direct_repo_input(&mut self) {
+        let repo_path_text = self.direct_repo_input.trim();
+        if repo_path_text.is_empty() {
+            self.last_error = Some("リポジトリパスが未入力です".to_string());
+            return;
+        }
+
+        let repo_path = PathBuf::from(repo_path_text);
+        if !repo_path.is_dir() {
+            self.last_error = Some(format!(
+                "リポジトリパスが不正です: {}",
+                repo_path.to_string_lossy()
+            ));
+            return;
+        }
+
+        if !git::is_git_repo(&repo_path) {
+            self.last_error = Some(format!(
+                "Gitリポジトリではありません (.git が必要): {}",
+                repo_path.to_string_lossy()
+            ));
+            self.log("直接選択失敗: Gitリポジトリ判定に失敗");
+            return;
+        }
+
+        self.set_selected_repo(repo_path);
+    }
+
+    fn set_selected_repo(&mut self, repo_path: PathBuf) {
+        self.selected_repo_path = Some(repo_path.clone());
+        self.direct_repo_input = repo_path.to_string_lossy().to_string();
+        self.snapshot = None;
+        self.selected_target_commit = None;
+        self.material_text.clear();
+        self.material_json.clear();
+        self.material_kind.clear();
+        self.app_status = AppStatus::Updating;
+        self.last_error = None;
+
+        self.monitor.send(MonitorCommand::SetRepo(repo_path));
         self.save_settings_with_log();
     }
 
@@ -490,12 +521,10 @@ impl eframe::App for CodexRollbackBridgeApp {
         self.poll_monitor_events();
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            Self::apply_black_text_visuals(ui);
             self.render_top_panel(ui);
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            Self::apply_black_text_visuals(ui);
             if self.selected_repo_path.is_some() {
                 self.render_main_screen(ui);
             } else {

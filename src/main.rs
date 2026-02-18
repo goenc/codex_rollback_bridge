@@ -17,7 +17,7 @@ fn main() -> eframe::Result<()> {
         "Codex Rollback Bridge",
         native_options,
         Box::new(move |cc| {
-            force_black_text_theme(&cc.egui_ctx);
+            apply_readable_light_theme(&cc.egui_ctx);
             let font_status = font::apply_required_font(&cc.egui_ctx, &project_root);
             Ok(Box::new(app::CodexRollbackBridgeApp::new(
                 project_root.clone(),
@@ -27,21 +27,24 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-fn force_black_text_theme(ctx: &eframe::egui::Context) {
-    let text_black = eframe::egui::Color32::from_rgb(0, 0, 0);
+fn apply_readable_light_theme(ctx: &eframe::egui::Context) {
+    let base_text = eframe::egui::Color32::from_rgb(24, 24, 24);
+    let strong_text = eframe::egui::Color32::from_rgb(8, 8, 8);
+    let weak_text = eframe::egui::Color32::from_rgb(56, 56, 56);
     let panel_bg = eframe::egui::Color32::from_gray(248);
 
     ctx.set_theme(eframe::egui::Theme::Light);
-    ctx.all_styles_mut(|style| {
+    ctx.style_mut_of(eframe::egui::Theme::Light, |style| {
         style.visuals.dark_mode = false;
-        style.visuals.text_alpha_from_coverage = eframe::egui::epaint::AlphaFromCoverage::Linear;
-        style.visuals.override_text_color = Some(text_black);
-        style.visuals.weak_text_color = Some(text_black);
-        style.visuals.widgets.noninteractive.fg_stroke.color = text_black;
-        style.visuals.widgets.inactive.fg_stroke.color = text_black;
-        style.visuals.widgets.hovered.fg_stroke.color = text_black;
-        style.visuals.widgets.active.fg_stroke.color = text_black;
-        style.visuals.widgets.open.fg_stroke.color = text_black;
+        style.visuals.text_alpha_from_coverage =
+            eframe::egui::epaint::AlphaFromCoverage::Gamma(0.55);
+        style.visuals.override_text_color = Some(base_text);
+        style.visuals.weak_text_color = Some(weak_text);
+        style.visuals.widgets.noninteractive.fg_stroke.color = base_text;
+        style.visuals.widgets.inactive.fg_stroke.color = base_text;
+        style.visuals.widgets.hovered.fg_stroke.color = strong_text;
+        style.visuals.widgets.active.fg_stroke.color = strong_text;
+        style.visuals.widgets.open.fg_stroke.color = strong_text;
         style.visuals.hyperlink_color = eframe::egui::Color32::from_rgb(0, 90, 180);
         style.visuals.warn_fg_color = eframe::egui::Color32::from_rgb(128, 96, 0);
         style.visuals.error_fg_color = eframe::egui::Color32::from_rgb(160, 0, 0);
