@@ -221,11 +221,11 @@ impl CodexRollbackBridgeApp {
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("現在ブランチ: {}", snapshot.current_branch));
             ui.separator();
-            ui.label(format!("HEAD: {}", snapshot.head_full_id));
+            ui.label(format!("現在HEAD: {}", snapshot.head_full_id));
             ui.separator();
             ui.label(format!("HEAD日時: {}", snapshot.head_datetime));
             ui.separator();
-            ui.label(format!("head_changed: {}", snapshot.head_changed));
+            ui.label(format!("HEAD変更検出: {}", snapshot.head_changed));
         });
         ui.label(format!("HEADメッセージ: {}", snapshot.head_message));
 
@@ -234,7 +234,10 @@ impl CodexRollbackBridgeApp {
         } else {
             Color32::from_rgb(0, 96, 0)
         };
-        ui.colored_label(dirty_color, format!("dirty: {}", snapshot.dirty));
+        ui.colored_label(
+            dirty_color,
+            format!("作業ツリー変更(dirty): {}", snapshot.dirty),
+        );
     }
 
     fn render_commit_table(&mut self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
@@ -249,9 +252,9 @@ impl CodexRollbackBridgeApp {
                     .num_columns(4)
                     .striped(true)
                     .show(ui, |ui| {
-                        ui.strong("datetime");
-                        ui.strong("short_id");
-                        ui.strong("message");
+                        ui.strong("日時");
+                        ui.strong("短縮ID");
+                        ui.strong("メッセージ");
                         ui.strong("状態");
                         ui.end_row();
 
@@ -297,7 +300,7 @@ impl CodexRollbackBridgeApp {
             }
 
             if let Some(target) = &self.selected_target_commit {
-                ui.label(format!("TARGET: {target}"));
+                ui.label(format!("選択ターゲット: {target}"));
             } else {
                 ui.colored_label(Color32::from_rgb(128, 96, 0), "ターゲットコミット未選択");
             }
@@ -319,7 +322,7 @@ impl CodexRollbackBridgeApp {
                 ui.separator();
                 ui.label(format!("生成種別: {}", self.material_kind));
                 ui.label(format!(
-                    "UTF-8 bytes (text/json): {}/{}",
+                    "UTF-8バイト数 (テキスト/JSON): {}/{}",
                     self.material_text.len(),
                     self.material_json.len()
                 ));
@@ -470,14 +473,17 @@ impl CodexRollbackBridgeApp {
     fn dirty_indicator(&self) -> (String, Color32) {
         match &self.snapshot {
             Some(snapshot) if snapshot.dirty => (
-                format!("dirty: {}", snapshot.dirty),
+                format!("作業ツリー変更(dirty): {}", snapshot.dirty),
                 Color32::from_rgb(160, 0, 0),
             ),
             Some(snapshot) => (
-                format!("dirty: {}", snapshot.dirty),
+                format!("作業ツリー変更(dirty): {}", snapshot.dirty),
                 Color32::from_rgb(0, 96, 0),
             ),
-            None => ("dirty: -".to_string(), Color32::from_rgb(64, 64, 64)),
+            None => (
+                "作業ツリー変更(dirty): -".to_string(),
+                Color32::from_rgb(64, 64, 64),
+            ),
         }
     }
 
