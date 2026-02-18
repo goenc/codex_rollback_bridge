@@ -11,7 +11,12 @@ use std::path::{Path, PathBuf};
 
 fn main() -> eframe::Result<()> {
     let project_root = resolve_project_root();
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_resizable(false)
+            .with_inner_size([1000.0, 500.0]),
+        ..Default::default()
+    };
 
     eframe::run_native(
         "Codex Rollback Bridge",

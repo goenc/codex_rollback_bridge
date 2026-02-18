@@ -59,9 +59,8 @@ impl AppStatus {
 
 #[derive(Debug, Clone)]
 pub struct RepoCandidate {
-    pub folder_name: String,
+    pub requirement_headline: String,
     pub path: PathBuf,
-    pub current_branch: String,
     pub last_commit_datetime: String,
 }
 

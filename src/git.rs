@@ -1,5 +1,7 @@
 use crate::models::{CommitInfo, RepoCandidate, RepoSnapshot, ScanScope};
 use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -30,18 +32,14 @@ pub fn scan_repositories(root: &Path, scope: ScanScope) -> Result<Vec<RepoCandid
             continue;
         }
 
-        let folder_name = dir
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| dir.to_string_lossy().to_string());
-        let current_branch = get_current_branch(&dir).unwrap_or_else(|_| "(取得失敗)".to_string());
+        let requirement_headline =
+            read_requirement_headline(&dir).unwrap_or_else(|| "(要件定義書なし)".to_string());
         let last_commit_datetime =
             get_last_commit_datetime(&dir).unwrap_or_else(|_| "(取得失敗)".to_string());
 
         repositories.push(RepoCandidate {
-            folder_name,
+            requirement_headline,
             path: dir,
-            current_branch,
             last_commit_datetime,
         });
     }
@@ -180,6 +178,41 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
     }
 
     Ok(commits)
+}
+
+fn read_requirement_headline(repo_path: &Path) -> Option<String> {
+    let mut definition_files: Vec<PathBuf> = fs::read_dir(repo_path)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|item| item.path()))
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy())
+                .map(|name| name.starts_with("要件定義_") && name.ends_with(".md"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    definition_files.sort();
+    for path in definition_files {
+        let Ok(file) = File::open(&path) else {
+            continue;
+        };
+        let mut reader = BufReader::new(file);
+        let mut first_line = String::new();
+        let Ok(read_size) = reader.read_line(&mut first_line) else {
+            continue;
+        };
+        if read_size == 0 {
+            continue;
+        }
+        let trimmed = first_line.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
 }
 
 fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {

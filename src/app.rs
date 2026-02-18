@@ -124,6 +124,8 @@ impl CodexRollbackBridgeApp {
     }
 
     fn render_top_panel(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+
         ui.horizontal_wrapped(|ui| {
             if ui.button("プロジェクト変更").clicked() {
                 self.show_project_change_dialog = true;
@@ -136,6 +138,8 @@ impl CodexRollbackBridgeApp {
             ui.separator();
             ui.label(format!("現在プロジェクト: {current_project}"));
         });
+
+        ui.add_space(6.0);
 
         ui.horizontal_wrapped(|ui| {
             ui.label("更新間隔(秒):");
@@ -188,6 +192,10 @@ impl CodexRollbackBridgeApp {
             };
             ui.colored_label(color, &feedback.message);
         }
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(2.0);
     }
 
     fn render_main_content(&mut self, ui: &mut egui::Ui) {
@@ -333,13 +341,19 @@ impl CodexRollbackBridgeApp {
     fn render_project_change_dialog(&mut self, ctx: &egui::Context) {
         let mut open = self.show_project_change_dialog;
         let mut close_requested = false;
+        let parent_size = ctx.content_rect().size();
+        let dialog_size = egui::vec2(
+            (parent_size.x * 0.9).max(640.0),
+            (parent_size.y * 0.9).max(420.0),
+        );
 
         egui::Window::new("プロジェクト変更")
             .open(&mut open)
             .collapsible(false)
-            .resizable(true)
-            .default_width(900.0)
-            .default_height(540.0)
+            .movable(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .fixed_size(dialog_size)
             .show(ctx, |ui| {
                 ui.label("ルートフォルダ配下をスキャンして Git リポジトリ候補を選択します。");
 
@@ -356,27 +370,62 @@ impl CodexRollbackBridgeApp {
                 if self.scan_results.is_empty() {
                     ui.label("候補なし");
                 } else {
+                    let total_width = ui.available_width().max(700.0);
+                    let title_width = 240.0;
+                    let datetime_width = 160.0;
+                    let path_width = (total_width - title_width - datetime_width).max(280.0);
                     ScrollArea::vertical()
                         .id_salt("project_candidate_scroll")
                         .max_height(320.0)
                         .show(ui, |ui| {
-                            let mut clicked_index = None;
-                            for (index, candidate) in self.scan_results.iter().enumerate() {
-                                let selected = self.selected_scan_index == Some(index);
-                                let label = format!(
-                                    "{} | {} | {} | {}",
-                                    candidate.folder_name,
-                                    candidate.path.display(),
-                                    candidate.current_branch,
-                                    candidate.last_commit_datetime
-                                );
-                                if ui.selectable_label(selected, label).clicked() {
-                                    clicked_index = Some(index);
-                                }
-                            }
-                            if let Some(index) = clicked_index {
-                                self.selected_scan_index = Some(index);
-                            }
+                            Grid::new("project_candidate_grid")
+                                .num_columns(3)
+                                .spacing(egui::vec2(0.0, 0.0))
+                                .show(ui, |ui| {
+                                    self.render_table_header_cell(ui, "要件定義1行目", title_width);
+                                    self.render_table_header_cell(ui, "パス", path_width);
+                                    self.render_table_header_cell(
+                                        ui,
+                                        "最終コミット",
+                                        datetime_width,
+                                    );
+                                    ui.end_row();
+
+                                    let mut clicked_index = None;
+                                    for (index, candidate) in self.scan_results.iter().enumerate() {
+                                        let selected = self.selected_scan_index == Some(index);
+                                        let mut row_clicked = false;
+                                        row_clicked |= self.render_table_selectable_cell(
+                                            ui,
+                                            &candidate.requirement_headline,
+                                            selected,
+                                            false,
+                                            title_width,
+                                        );
+                                        row_clicked |= self.render_table_selectable_cell(
+                                            ui,
+                                            &candidate.path.to_string_lossy(),
+                                            selected,
+                                            false,
+                                            path_width,
+                                        );
+                                        row_clicked |= self.render_table_selectable_cell(
+                                            ui,
+                                            &candidate.last_commit_datetime,
+                                            selected,
+                                            false,
+                                            datetime_width,
+                                        );
+                                        if row_clicked {
+                                            clicked_index = Some(index);
+                                        }
+                                        ui.end_row();
+                                    }
+
+                                    if let Some(index) = clicked_index {
+                                        self.selected_scan_index = Some(index);
+                                    }
+                                });
                         });
                 }
 
@@ -582,13 +631,15 @@ impl CodexRollbackBridgeApp {
 impl eframe::App for CodexRollbackBridgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_monitor_events();
-        if self.show_project_change_dialog && !self.project_change_dialog_was_open {
-            self.scan_repositories();
-        }
+        let was_dialog_open = self.project_change_dialog_was_open;
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             self.render_top_panel(ui);
         });
+
+        if self.show_project_change_dialog && !was_dialog_open {
+            self.scan_repositories();
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             self.render_main_content(ui);
