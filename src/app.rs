@@ -256,12 +256,14 @@ impl CodexRollbackBridgeApp {
                                     .map(|id| id == commit.full_id)
                                     .unwrap_or(false);
                                 let is_head = snapshot.head_full_id == commit.full_id;
+                                let is_master_scope = commit.scope_mark == "M";
 
                                 let mut row_clicked = false;
                                 row_clicked |= self.render_table_selectable_cell(
                                     ui,
                                     &commit.scope_mark,
                                     is_selected,
+                                    is_master_scope,
                                     is_head,
                                     scope_width,
                                 );
@@ -269,6 +271,7 @@ impl CodexRollbackBridgeApp {
                                     ui,
                                     &commit.datetime,
                                     is_selected,
+                                    is_master_scope,
                                     is_head,
                                     datetime_width,
                                 );
@@ -276,6 +279,7 @@ impl CodexRollbackBridgeApp {
                                     ui,
                                     &commit.short_id,
                                     is_selected,
+                                    is_master_scope,
                                     is_head,
                                     short_id_width,
                                 );
@@ -283,6 +287,7 @@ impl CodexRollbackBridgeApp {
                                     ui,
                                     &commit.message,
                                     is_selected,
+                                    is_master_scope,
                                     is_head,
                                     message_width,
                                 );
@@ -326,16 +331,11 @@ impl CodexRollbackBridgeApp {
         ui: &mut egui::Ui,
         text: &str,
         selected: bool,
+        is_master_scope: bool,
         is_head: bool,
         width: f32,
     ) -> bool {
-        let fill_color = if selected {
-            Color32::from_rgb(236, 236, 236)
-        } else if is_head {
-            Color32::from_rgb(228, 245, 228)
-        } else {
-            Color32::from_rgb(252, 252, 252)
-        };
+        let fill_color = Self::table_row_fill_color(selected, is_master_scope, is_head);
         Frame::NONE
             .fill(fill_color)
             .stroke(Stroke::new(1.0, Color32::from_rgb(144, 144, 144)))
@@ -358,6 +358,16 @@ impl CodexRollbackBridgeApp {
             .show(ui, |ui| {
                 ui.add_sized([width, 24.0], egui::Label::new(""));
             });
+    }
+
+    fn table_row_fill_color(selected: bool, is_master_scope: bool, is_head: bool) -> Color32 {
+        if selected {
+            Color32::from_rgb(236, 236, 236)
+        } else if is_master_scope || is_head {
+            Color32::from_rgb(228, 245, 228)
+        } else {
+            Color32::from_rgb(252, 252, 252)
+        }
     }
 
     fn render_rollback_section(&mut self, ui: &mut egui::Ui) {
@@ -458,6 +468,7 @@ impl CodexRollbackBridgeApp {
                                             &candidate.requirement_headline,
                                             selected,
                                             false,
+                                            false,
                                             title_width,
                                         );
                                         row_clicked |= self.render_table_selectable_cell(
@@ -465,12 +476,14 @@ impl CodexRollbackBridgeApp {
                                             &candidate.path.to_string_lossy(),
                                             selected,
                                             false,
+                                            false,
                                             path_width,
                                         );
                                         row_clicked |= self.render_table_selectable_cell(
                                             ui,
                                             &candidate.last_commit_datetime,
                                             selected,
+                                            false,
                                             false,
                                             datetime_width,
                                         );
