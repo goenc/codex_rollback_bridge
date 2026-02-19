@@ -363,7 +363,9 @@ impl CodexRollbackBridgeApp {
     fn table_row_fill_color(selected: bool, is_master_scope: bool, is_head: bool) -> Color32 {
         if selected {
             Color32::from_rgb(236, 236, 236)
-        } else if is_master_scope || is_head {
+        } else if is_head {
+            Color32::from_rgb(255, 245, 204)
+        } else if is_master_scope {
             Color32::from_rgb(228, 245, 228)
         } else {
             Color32::from_rgb(252, 252, 252)
@@ -761,5 +763,43 @@ impl eframe::App for CodexRollbackBridgeApp {
 
         let _ = self.logs.len();
         ctx.request_repaint_after(Duration::from_millis(200));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CodexRollbackBridgeApp;
+    use eframe::egui::Color32;
+
+    #[test]
+    fn table_row_fill_color_prioritizes_selected() {
+        assert_eq!(
+            CodexRollbackBridgeApp::table_row_fill_color(true, true, true),
+            Color32::from_rgb(236, 236, 236)
+        );
+    }
+
+    #[test]
+    fn table_row_fill_color_prioritizes_head_over_master() {
+        assert_eq!(
+            CodexRollbackBridgeApp::table_row_fill_color(false, true, true),
+            Color32::from_rgb(255, 245, 204)
+        );
+    }
+
+    #[test]
+    fn table_row_fill_color_sets_master_to_green() {
+        assert_eq!(
+            CodexRollbackBridgeApp::table_row_fill_color(false, true, false),
+            Color32::from_rgb(228, 245, 228)
+        );
+    }
+
+    #[test]
+    fn table_row_fill_color_sets_normal_to_white() {
+        assert_eq!(
+            CodexRollbackBridgeApp::table_row_fill_color(false, false, false),
+            Color32::from_rgb(252, 252, 252)
+        );
     }
 }
