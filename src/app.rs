@@ -4,7 +4,10 @@ use crate::git;
 use crate::models::{AppStatus, RepoCandidate, RepoSnapshot, ScanScope, Settings};
 use crate::monitor::{MonitorCommand, MonitorController, MonitorEvent};
 use eframe::egui::{self, Button, Color32, Frame, Grid, RichText, ScrollArea, Sense, Stroke};
-use std::path::PathBuf;
+use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 struct CopyFeedback {
@@ -28,9 +31,14 @@ pub struct CodexRollbackBridgeApp {
     monitor: MonitorController,
     config_contract: String,
     consecutive_failures: u32,
+    commit_scroll_offset_y: f32,
+    commit_scroll_point_remainder: f32,
+    commit_scroll_line_remainder: f32,
     show_project_change_dialog: bool,
     project_change_dialog_was_open: bool,
     copy_feedback: Option<CopyFeedback>,
+    show_commit_message_dialog: bool,
+    commit_message_dialog_text: Option<String>,
 }
 
 impl CodexRollbackBridgeApp {
@@ -68,9 +76,14 @@ impl CodexRollbackBridgeApp {
             monitor: MonitorController::new(settings.update_interval_sec),
             config_contract: config::config_contract_line(),
             consecutive_failures: 0,
+            commit_scroll_offset_y: 0.0,
+            commit_scroll_point_remainder: 0.0,
+            commit_scroll_line_remainder: 0.0,
             show_project_change_dialog: selected_repo_path.is_none(),
             project_change_dialog_was_open: false,
             copy_feedback: None,
+            show_commit_message_dialog: false,
+            commit_message_dialog_text: None,
         };
 
         if !app.git_available {
@@ -130,13 +143,27 @@ impl CodexRollbackBridgeApp {
             if ui.button("プロジェクト変更").clicked() {
                 self.show_project_change_dialog = true;
             }
-            let current_project = self
-                .selected_repo_path
+            let current_project_path = self.selected_repo_path.as_ref().cloned();
+            let project_name = current_project_path
                 .as_ref()
-                .map(|path| path.to_string_lossy().to_string())
+                .and_then(|path| Self::read_requirement_headline(path))
+                .or_else(|| {
+                    current_project_path
+                        .as_ref()
+                        .and_then(|path| path.file_name())
+                        .map(|name| name.to_string_lossy().to_string())
+                })
                 .unwrap_or_else(|| "(未選択)".to_string());
+            let folder_name = current_project_path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "-".to_string());
             ui.separator();
-            ui.label(format!("現在プロジェクト: {current_project}"));
+            ui.label("現在のプロジェクト名:");
+            ui.label(project_name);
+            ui.separator();
+            ui.label(format!("フォルダ: {folder_name}"));
         });
 
         ui.add_space(4.0);
@@ -154,8 +181,13 @@ impl CodexRollbackBridgeApp {
             }
 
             let can_manual_refresh = self.git_available && self.selected_repo_path.is_some();
+            let manual_refresh_text = if can_manual_refresh {
+                RichText::new("手動更新")
+            } else {
+                RichText::new("手動更新").color(Color32::from_gray(140))
+            };
             if ui
-                .add_enabled(can_manual_refresh, Button::new("手動更新"))
+                .add_enabled(can_manual_refresh, Button::new(manual_refresh_text))
                 .clicked()
             {
                 self.app_status = AppStatus::Updating;
@@ -167,10 +199,6 @@ impl CodexRollbackBridgeApp {
                 self.status_color(),
                 RichText::new(format!("状態: {}", self.app_status.label())).strong(),
             );
-            ui.separator();
-
-            let (dirty_label, dirty_color) = self.dirty_indicator();
-            ui.colored_label(dirty_color, RichText::new(dirty_label).strong());
         });
 
         if self.consecutive_failures >= 3 {
@@ -184,14 +212,21 @@ impl CodexRollbackBridgeApp {
             ui.colored_label(Color32::RED, error);
         }
 
-        if let Some(feedback) = &self.copy_feedback {
+        let feedback_line_height = ui.text_style_height(&egui::TextStyle::Body);
+        let (feedback_text, feedback_color) = if let Some(feedback) = &self.copy_feedback {
             let color = if feedback.is_error {
                 Color32::from_rgb(160, 0, 0)
             } else {
                 Color32::from_rgb(0, 96, 0)
             };
-            ui.colored_label(color, &feedback.message);
-        }
+            (feedback.message.as_str(), color)
+        } else {
+            ("", Color32::TRANSPARENT)
+        };
+        ui.add_sized(
+            [ui.available_width(), feedback_line_height],
+            egui::Label::new(RichText::new(feedback_text).color(feedback_color)).truncate(),
+        );
 
         ui.add_space(2.0);
         ui.separator();
@@ -211,11 +246,14 @@ impl CodexRollbackBridgeApp {
         }
 
         ui.separator();
-        self.render_rollback_section(ui);
+        self.render_rollback_status(ui);
     }
 
     fn render_commit_table(&mut self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
-        const COMMIT_TABLE_SLOTS: usize = 10;
+        const VISIBLE_ROWS: usize = 10;
+        const ROW_OUTER_HEIGHT: f32 = 26.0;
+        const VIEWPORT_TRIM_PX: f32 = 2.0;
+        const MAX_COMMITS: usize = 50;
         let available_width = ui.available_width();
         let table_width = if available_width >= 700.0 {
             available_width.min(990.0)
@@ -234,84 +272,257 @@ impl CodexRollbackBridgeApp {
             ui.add_space(side_margin);
             ui.vertical(|ui| {
                 ui.set_width(table_width);
-                ui.label("コミット一覧（10枠固定）");
-                ui.label("凡例: M=マスターコミット / P=プレメインコミット");
-
-                let mut clicked_target: Option<String> = None;
-                Grid::new("commit_table_grid")
-                    .num_columns(4)
-                    .spacing(egui::vec2(0.0, 0.0))
-                    .show(ui, |ui| {
-                        self.render_table_header_cell(ui, "区分", scope_width);
-                        self.render_table_header_cell(ui, "日時", datetime_width);
-                        self.render_table_header_cell(ui, "短縮ID", short_id_width);
-                        self.render_table_header_cell(ui, "メッセージ", message_width);
-                        ui.end_row();
-
-                        for row_index in 0..COMMIT_TABLE_SLOTS {
-                            if let Some(commit) = snapshot.recent_commits.get(row_index) {
-                                let is_selected = self
-                                    .selected_target_commit
-                                    .as_deref()
-                                    .map(|id| id == commit.full_id)
-                                    .unwrap_or(false);
-                                let is_head = snapshot.head_full_id == commit.full_id;
-                                let is_master_scope = commit.scope_mark == "M";
-
-                                let mut row_clicked = false;
-                                row_clicked |= self.render_table_selectable_cell(
-                                    ui,
-                                    &commit.scope_mark,
-                                    is_selected,
-                                    is_master_scope,
-                                    is_head,
-                                    scope_width,
-                                );
-                                row_clicked |= self.render_table_selectable_cell(
-                                    ui,
-                                    &commit.datetime,
-                                    is_selected,
-                                    is_master_scope,
-                                    is_head,
-                                    datetime_width,
-                                );
-                                row_clicked |= self.render_table_selectable_cell(
-                                    ui,
-                                    &commit.short_id,
-                                    is_selected,
-                                    is_master_scope,
-                                    is_head,
-                                    short_id_width,
-                                );
-                                row_clicked |= self.render_table_selectable_cell(
-                                    ui,
-                                    &commit.message,
-                                    is_selected,
-                                    is_master_scope,
-                                    is_head,
-                                    message_width,
-                                );
-
-                                if row_clicked {
-                                    clicked_target = Some(commit.full_id.clone());
-                                }
-                            } else {
-                                self.render_table_empty_cell(ui, scope_width);
-                                self.render_table_empty_cell(ui, datetime_width);
-                                self.render_table_empty_cell(ui, short_id_width);
-                                self.render_table_empty_cell(ui, message_width);
-                            }
-                            ui.end_row();
-                        }
+                let dirty = snapshot.dirty;
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label("コミット一覧（表示10行 / 最大50件）");
+                        ui.label("凡例: M=マスターコミット / P=プレメインコミット");
                     });
+                    ui.add_space((table_width - 500.0).max(8.0));
+                    self.render_rollback_buttons(ui, dirty);
+                });
 
-                if let Some(target) = clicked_target {
-                    self.selected_target_commit = Some(target);
-                    self.copy_feedback = None;
-                }
+                ui.scope(|ui| {
+                    // Keep table row height deterministic even when global interact size is larger.
+                    ui.style_mut().spacing.interact_size.y = 0.0;
+
+                    // Account for frame stroke so 10 rows are fully visible without clipping.
+                    let viewport_height =
+                        (VISIBLE_ROWS as f32 * ROW_OUTER_HEIGHT - VIEWPORT_TRIM_PX).max(0.0);
+                    let display_count =
+                        Self::commit_display_row_count(snapshot.recent_commits.len(), VISIBLE_ROWS);
+                    let commits: Vec<_> =
+                        snapshot.recent_commits.iter().take(MAX_COMMITS).collect();
+                    let mut clicked_target: Option<String> = None;
+                    let mut clicked_message: Option<String> = None;
+
+                    Grid::new("commit_table_header_grid")
+                        .num_columns(4)
+                        .spacing(egui::vec2(0.0, 0.0))
+                        .show(ui, |ui| {
+                            self.render_table_header_cell(ui, "区分", scope_width);
+                            self.render_table_header_cell(ui, "日時", datetime_width);
+                            self.render_table_header_cell(ui, "短縮ID", short_id_width);
+                            self.render_table_header_cell(ui, "メッセージ", message_width);
+                            ui.end_row();
+                        });
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(table_width, viewport_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            let scroll_rect = egui::Rect::from_min_size(
+                                ui.cursor().min,
+                                egui::vec2(table_width, viewport_height),
+                            );
+                            let pointer_on_table = ui.rect_contains_pointer(scroll_rect);
+                            let wheel_rows = if pointer_on_table {
+                                self.collect_commit_wheel_rows(ui, ROW_OUTER_HEIGHT, VISIBLE_ROWS)
+                            } else {
+                                0
+                            };
+                            if pointer_on_table && wheel_rows != 0 {
+                                self.commit_scroll_offset_y = (self.commit_scroll_offset_y
+                                    + wheel_rows as f32 * ROW_OUTER_HEIGHT)
+                                    .max(0.0);
+                                ui.ctx().input_mut(|input| {
+                                    input.smooth_scroll_delta = egui::Vec2::ZERO;
+                                    input.raw_scroll_delta = egui::Vec2::ZERO;
+                                });
+                            }
+
+                            let output = ScrollArea::vertical()
+                                .id_salt("commit_table_scroll")
+                                .max_height(viewport_height)
+                                .vertical_scroll_offset(self.commit_scroll_offset_y)
+                                .show(ui, |ui| {
+                                    Grid::new("commit_table_rows_grid")
+                                        .num_columns(4)
+                                        .spacing(egui::vec2(0.0, 0.0))
+                                        .show(ui, |ui| {
+                                            for row_index in 0..display_count {
+                                                if let Some(commit) = commits.get(row_index) {
+                                                    let is_selected = self
+                                                        .selected_target_commit
+                                                        .as_deref()
+                                                        .map(|id| id == commit.full_id)
+                                                        .unwrap_or(false);
+                                                    let is_head =
+                                                        snapshot.head_full_id == commit.full_id;
+                                                    let is_master_scope = commit.scope_mark == "M";
+
+                                                    let mut row_clicked = false;
+                                                    row_clicked |= self
+                                                        .render_table_selectable_cell(
+                                                            ui,
+                                                            &commit.scope_mark,
+                                                            is_selected,
+                                                            is_master_scope,
+                                                            is_head,
+                                                            scope_width,
+                                                        );
+                                                    row_clicked |= self
+                                                        .render_table_selectable_cell(
+                                                            ui,
+                                                            &commit.datetime,
+                                                            is_selected,
+                                                            is_master_scope,
+                                                            is_head,
+                                                            datetime_width,
+                                                        );
+                                                    row_clicked |= self
+                                                        .render_table_selectable_cell(
+                                                            ui,
+                                                            &commit.short_id,
+                                                            is_selected,
+                                                            is_master_scope,
+                                                            is_head,
+                                                            short_id_width,
+                                                        );
+                                                    let message_clicked = self
+                                                        .render_table_selectable_cell(
+                                                            ui,
+                                                            &commit.message,
+                                                            is_selected,
+                                                            is_master_scope,
+                                                            is_head,
+                                                            message_width,
+                                                        );
+                                                    row_clicked |= message_clicked;
+
+                                                    if row_clicked {
+                                                        clicked_target =
+                                                            Some(commit.full_id.clone());
+                                                    }
+                                                    if message_clicked {
+                                                        clicked_message =
+                                                            Some(commit.message.clone());
+                                                    }
+                                                } else {
+                                                    self.render_table_empty_cell(ui, scope_width);
+                                                    self.render_table_empty_cell(
+                                                        ui,
+                                                        datetime_width,
+                                                    );
+                                                    self.render_table_empty_cell(
+                                                        ui,
+                                                        short_id_width,
+                                                    );
+                                                    self.render_table_empty_cell(ui, message_width);
+                                                }
+                                                ui.end_row();
+                                            }
+                                        });
+                                });
+
+                            let max_offset = (display_count as f32 * ROW_OUTER_HEIGHT
+                                - viewport_height)
+                                .max(0.0);
+                            self.commit_scroll_offset_y =
+                                output.state.offset.y.clamp(0.0, max_offset);
+                        },
+                    );
+
+                    if let Some(target) = clicked_target {
+                        self.selected_target_commit = Some(target);
+                        self.copy_feedback = None;
+                    }
+                    if let Some(message) = clicked_message {
+                        self.open_commit_message_dialog(message);
+                    }
+                });
             });
             ui.add_space(side_margin);
         });
+    }
+
+    fn commit_display_row_count(commit_count: usize, visible_rows: usize) -> usize {
+        let bounded = commit_count.min(50);
+        bounded.max(visible_rows)
+    }
+
+    fn read_requirement_headline(repo_path: &Path) -> Option<String> {
+        let mut definition_files: Vec<PathBuf> = fs::read_dir(repo_path)
+            .ok()?
+            .filter_map(|entry| entry.ok().map(|item| item.path()))
+            .filter(|path| path.is_file())
+            .filter(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy())
+                    .map(|name| name.starts_with("要件定義_") && name.ends_with(".md"))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        definition_files.sort();
+        for path in definition_files {
+            let Ok(file) = File::open(&path) else {
+                continue;
+            };
+            let mut reader = BufReader::new(file);
+            let mut first_line = String::new();
+            let Ok(read_size) = reader.read_line(&mut first_line) else {
+                continue;
+            };
+            if read_size == 0 {
+                continue;
+            }
+            let trimmed = first_line.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        None
+    }
+
+    fn collect_commit_wheel_rows(
+        &mut self,
+        ui: &egui::Ui,
+        row_outer_height: f32,
+        visible_rows: usize,
+    ) -> i32 {
+        let mut rows = 0i32;
+        let events = ui.ctx().input(|input| input.events.clone());
+        for event in events {
+            if let egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+            } = event
+            {
+                if modifiers.ctrl || modifiers.command {
+                    continue;
+                }
+                match unit {
+                    egui::MouseWheelUnit::Line => {
+                        self.commit_scroll_line_remainder += -delta.y;
+                        while self.commit_scroll_line_remainder >= 1.0 {
+                            rows += 1;
+                            self.commit_scroll_line_remainder -= 1.0;
+                        }
+                        while self.commit_scroll_line_remainder <= -1.0 {
+                            rows -= 1;
+                            self.commit_scroll_line_remainder += 1.0;
+                        }
+                    }
+                    egui::MouseWheelUnit::Point => {
+                        self.commit_scroll_point_remainder += -delta.y;
+                        while self.commit_scroll_point_remainder >= row_outer_height {
+                            rows += 1;
+                            self.commit_scroll_point_remainder -= row_outer_height;
+                        }
+                        while self.commit_scroll_point_remainder <= -row_outer_height {
+                            rows -= 1;
+                            self.commit_scroll_point_remainder += row_outer_height;
+                        }
+                    }
+                    egui::MouseWheelUnit::Page => {
+                        rows += (-delta.y).round() as i32 * visible_rows as i32;
+                    }
+                }
+            }
+        }
+        rows
     }
 
     fn render_table_header_cell(&self, ui: &mut egui::Ui, text: &str, width: f32) {
@@ -360,11 +571,9 @@ impl CodexRollbackBridgeApp {
             });
     }
 
-    fn table_row_fill_color(selected: bool, is_master_scope: bool, is_head: bool) -> Color32 {
+    fn table_row_fill_color(selected: bool, is_master_scope: bool, _is_head: bool) -> Color32 {
         if selected {
             Color32::from_rgb(236, 236, 236)
-        } else if is_head {
-            Color32::from_rgb(255, 245, 204)
         } else if is_master_scope {
             Color32::from_rgb(228, 245, 228)
         } else {
@@ -372,40 +581,94 @@ impl CodexRollbackBridgeApp {
         }
     }
 
-    fn render_rollback_section(&mut self, ui: &mut egui::Ui) {
-        let has_snapshot = self.snapshot.is_some();
-        let dirty = self
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.dirty)
-            .unwrap_or(false);
-
+    fn render_rollback_buttons(&mut self, ui: &mut egui::Ui, dirty: bool) {
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(has_snapshot && dirty, Button::new("編集ロールバック"))
-                .clicked()
-            {
+            let worktree_text = if !dirty {
+                RichText::new("編集ロールバック")
+            } else {
+                RichText::new("編集ロールバック").color(Color32::from_gray(140))
+            };
+            if ui.add_enabled(!dirty, Button::new(worktree_text)).clicked() {
                 self.copy_worktree_rollback_command();
             }
 
+            let previous_head_text = if dirty {
+                RichText::new("1コミット戻す")
+            } else {
+                RichText::new("1コミット戻す").color(Color32::from_gray(140))
+            };
             if ui
-                .add_enabled(has_snapshot && !dirty, Button::new("1コミット戻す"))
+                .add_enabled(dirty, Button::new(previous_head_text))
                 .clicked()
             {
                 self.copy_previous_head_rollback_command();
             }
         });
+    }
 
-        if !has_snapshot {
-            ui.label("監視データ未取得のためコマンド生成できません");
+    fn render_rollback_status(&mut self, ui: &mut egui::Ui) {
+        let _ = ui;
+    }
+
+    fn open_commit_message_dialog(&mut self, message: String) {
+        self.commit_message_dialog_text = Some(message);
+        self.show_commit_message_dialog = true;
+    }
+
+    fn render_commit_message_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_commit_message_dialog {
             return;
         }
 
-        if dirty {
-            ui.label("作業ツリー変更あり: 先に「編集ロールバック」を実行してください");
-        } else {
-            ui.label("作業ツリー変更なし: 「1コミット戻す」をクリップボードにコピーします");
+        let mut open = self.show_commit_message_dialog;
+        let mut close_requested = false;
+        let parent_size = ctx.content_rect().size();
+        let dialog_size = egui::vec2(
+            (parent_size.x * 0.78).clamp(560.0, 960.0),
+            (parent_size.y * 0.42).clamp(220.0, 360.0),
+        );
+        let message = self
+            .commit_message_dialog_text
+            .clone()
+            .unwrap_or_else(|| "(メッセージなし)".to_string());
+
+        egui::Window::new("コミットメッセージ全文")
+            .open(&mut open)
+            .collapsible(false)
+            .movable(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 12.0))
+            .fixed_size(dialog_size)
+            .show(ctx, |ui| {
+                ui.label("選択したコミットのメッセージ全文");
+                ui.separator();
+
+                ScrollArea::vertical()
+                    .id_salt("commit_message_dialog_scroll")
+                    .max_height((dialog_size.y - 92.0).max(96.0))
+                    .show(ui, |ui| {
+                        let mut readonly_message = message.clone();
+                        ui.add_sized(
+                            [ui.available_width(), (dialog_size.y - 120.0).max(72.0)],
+                            egui::TextEdit::multiline(&mut readonly_message)
+                                .desired_width(f32::INFINITY)
+                                .interactive(false),
+                        );
+                    });
+
+                ui.add_space(6.0);
+                if ui.button("閉じる").clicked() {
+                    close_requested = true;
+                }
+            });
+
+        if close_requested {
+            open = false;
         }
+        if !open {
+            self.commit_message_dialog_text = None;
+        }
+        self.show_commit_message_dialog = open;
     }
 
     fn render_project_change_dialog(&mut self, ctx: &egui::Context) {
@@ -504,8 +767,14 @@ impl CodexRollbackBridgeApp {
 
                 ui.separator();
                 ui.horizontal(|ui| {
+                    let can_confirm = self.selected_scan_index.is_some();
+                    let confirm_text = if can_confirm {
+                        RichText::new("選択確定")
+                    } else {
+                        RichText::new("選択確定").color(Color32::from_gray(140))
+                    };
                     if ui
-                        .add_enabled(self.selected_scan_index.is_some(), Button::new("選択確定"))
+                        .add_enabled(can_confirm, Button::new(confirm_text))
                         .clicked()
                         && self.confirm_selected_repo()
                     {
@@ -530,33 +799,6 @@ impl CodexRollbackBridgeApp {
             AppStatus::Updating => Color32::from_rgb(128, 96, 0),
             AppStatus::Error => Color32::from_rgb(160, 0, 0),
         }
-    }
-
-    fn dirty_indicator(&self) -> (String, Color32) {
-        match &self.snapshot {
-            Some(snapshot) if snapshot.dirty => (
-                format!(
-                    "作業ツリー変更: {}",
-                    Self::dirty_status_text(snapshot.dirty)
-                ),
-                Color32::from_rgb(160, 0, 0),
-            ),
-            Some(snapshot) => (
-                format!(
-                    "作業ツリー変更: {}",
-                    Self::dirty_status_text(snapshot.dirty)
-                ),
-                Color32::from_rgb(0, 96, 0),
-            ),
-            None => (
-                "作業ツリー変更: -".to_string(),
-                Color32::from_rgb(64, 64, 64),
-            ),
-        }
-    }
-
-    fn dirty_status_text(dirty: bool) -> &'static str {
-        if dirty { "変更中" } else { "変更なし" }
     }
 
     fn pick_root_folder(&mut self) {
@@ -623,6 +865,11 @@ impl CodexRollbackBridgeApp {
         self.selected_repo_path = Some(repo_path.clone());
         self.snapshot = None;
         self.selected_target_commit = None;
+        self.show_commit_message_dialog = false;
+        self.commit_message_dialog_text = None;
+        self.commit_scroll_offset_y = 0.0;
+        self.commit_scroll_point_remainder = 0.0;
+        self.commit_scroll_line_remainder = 0.0;
         self.app_status = AppStatus::Updating;
         self.last_error = None;
         self.copy_feedback = None;
@@ -665,12 +912,9 @@ impl CodexRollbackBridgeApp {
             return;
         };
 
-        if snapshot.dirty {
-            self.set_copy_feedback(
-                "作業ツリー変更があるため先に「編集ロールバック」を実行してください",
-                true,
-            );
-            self.log("1コミット戻す生成失敗: 作業ツリー変更あり");
+        if !snapshot.dirty {
+            self.set_copy_feedback("作業ツリー変更がないため「1コミット戻す」は無効です", true);
+            self.log("1コミット戻す生成失敗: 作業ツリー変更なし");
             return;
         }
 
@@ -759,6 +1003,7 @@ impl eframe::App for CodexRollbackBridgeApp {
         if self.show_project_change_dialog {
             self.render_project_change_dialog(ctx);
         }
+        self.render_commit_message_dialog(ctx);
         self.project_change_dialog_was_open = self.show_project_change_dialog;
 
         let _ = self.logs.len();
@@ -780,10 +1025,10 @@ mod tests {
     }
 
     #[test]
-    fn table_row_fill_color_prioritizes_head_over_master() {
+    fn table_row_fill_color_uses_master_when_head() {
         assert_eq!(
             CodexRollbackBridgeApp::table_row_fill_color(false, true, true),
-            Color32::from_rgb(255, 245, 204)
+            Color32::from_rgb(228, 245, 228)
         );
     }
 
@@ -801,5 +1046,19 @@ mod tests {
             CodexRollbackBridgeApp::table_row_fill_color(false, false, false),
             Color32::from_rgb(252, 252, 252)
         );
+    }
+
+    #[test]
+    fn commit_display_row_count_keeps_minimum_visible_rows() {
+        assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(0, 10), 10);
+        assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(8, 10), 10);
+        assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(10, 10), 10);
+    }
+
+    #[test]
+    fn commit_display_row_count_caps_to_fifty() {
+        assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(11, 10), 11);
+        assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(50, 10), 50);
+        assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(60, 10), 50);
     }
 }
