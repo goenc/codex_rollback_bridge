@@ -392,7 +392,7 @@ impl CodexRollbackBridgeApp {
         if dirty {
             ui.label("作業ツリー変更あり: 先に「編集ロールバック」を実行してください");
         } else {
-            ui.label("作業ツリー変更なし: 「1コミット戻す」を実行できます");
+            ui.label("作業ツリー変更なし: 「1コミット戻す」をクリップボードにコピーします");
         }
     }
 
