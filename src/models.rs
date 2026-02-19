@@ -66,6 +66,7 @@ pub struct RepoCandidate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitInfo {
+    pub scope_mark: String,
     pub datetime: String,
     pub short_id: String,
     pub message: String,

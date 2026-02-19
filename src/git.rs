@@ -1,4 +1,5 @@
 use crate::models::{CommitInfo, RepoCandidate, RepoSnapshot, ScanScope};
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -6,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const GIT_DATE_FORMAT_ARG: &str = "--date=format:%Y/%m/%d %H:%M";
+const MAIN_BRANCH_NAME: &str = "main";
 
 pub fn git_exists() -> bool {
     Command::new("git")
@@ -152,12 +154,15 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
         repo_path,
         &[
             "log",
+            "--all",
             "-n",
             max_count_arg.as_str(),
             GIT_DATE_FORMAT_ARG,
             "--pretty=format:%H%x1f%h%x1f%cd%x1f%s",
         ],
     )?;
+
+    let main_commit_ids = collect_main_commit_ids(repo_path)?;
 
     let mut commits = Vec::new();
     for line in output.lines() {
@@ -170,6 +175,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
         let datetime = parts.next().unwrap_or_default().to_string();
         let message = parts.next().unwrap_or_default().to_string();
         commits.push(CommitInfo {
+            scope_mark: classify_scope_mark(&main_commit_ids, &full_id).to_string(),
             datetime,
             short_id,
             message,
@@ -178,6 +184,53 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
     }
 
     Ok(commits)
+}
+
+fn collect_main_commit_ids(repo_path: &Path) -> Result<Option<HashSet<String>>, String> {
+    if !local_branch_exists(repo_path, MAIN_BRANCH_NAME)? {
+        return Ok(None);
+    }
+
+    let rev_list = run_git(repo_path, &["rev-list", MAIN_BRANCH_NAME])?;
+    let ids = rev_list
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<HashSet<_>>();
+
+    Ok(Some(ids))
+}
+
+fn local_branch_exists(repo_path: &Path, branch_name: &str) -> Result<bool, String> {
+    let branch_ref = format!("refs/heads/{branch_name}");
+    let output = Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", branch_ref.as_str()])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|err| format!("failed to launch git (show-ref): {err}"))?;
+
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(format!(
+            "git show-ref failed: status={} stderr='{}'",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
+}
+
+fn classify_scope_mark(main_commit_ids: &Option<HashSet<String>>, full_id: &str) -> &'static str {
+    if main_commit_ids
+        .as_ref()
+        .map(|ids| ids.contains(full_id))
+        .unwrap_or(false)
+    {
+        "M"
+    } else {
+        "P"
+    }
 }
 
 fn read_requirement_headline(repo_path: &Path) -> Option<String> {
@@ -235,4 +288,27 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     Ok(stdout.trim_end_matches(['\r', '\n']).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_scope_mark;
+    use std::collections::HashSet;
+
+    #[test]
+    fn classify_scope_mark_returns_m_when_commit_is_in_main_history() {
+        let mut ids = HashSet::new();
+        ids.insert("abc".to_string());
+        let main_ids = Some(ids);
+        assert_eq!(classify_scope_mark(&main_ids, "abc"), "M");
+    }
+
+    #[test]
+    fn classify_scope_mark_returns_p_when_commit_is_not_in_main_history() {
+        let mut ids = HashSet::new();
+        ids.insert("abc".to_string());
+        let main_ids = Some(ids);
+        assert_eq!(classify_scope_mark(&main_ids, "def"), "P");
+        assert_eq!(classify_scope_mark(&None, "def"), "P");
+    }
 }

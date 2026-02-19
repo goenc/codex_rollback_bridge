@@ -23,6 +23,8 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 - 最小素材: 指定の最小項目のみを含む素材
 - 詳細素材: 最小素材に加えて status/diff 系情報を含む素材
 - 状態: 画面上の動作モード（`プロジェクト未選択` `選択済み` `更新中` `エラー状態`）
+- マスターコミット: `main` ブランチ履歴に含まれるコミット（区分 `M`）
+- プレメインコミット: `main` ブランチ履歴に含まれないコミット（区分 `P`）
 
 ## 3. システム構成
 - 実装言語: Rust
@@ -70,7 +72,7 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
   - 不一致時のみ HEAD変更と判定する。
   - 初回更新時（直前値なし）は HEAD変更として扱う。
 - HEAD変更時のみ更新:
-  - コミット一覧（内部保持は最大50件、表示枠は10件固定）
+  - コミット一覧（`--all` 対象、内部保持は最大50件、表示枠は10件固定）
 - 日時表示形式:
   - `YYYY/MM/DD HH:MM`
 
@@ -78,9 +80,13 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 - 表示枠: 10件固定（コミット不足分は空行表示）
 - 内部保持件数上限: 50件
 - 表示列:
+  - `scope`（`M` / `P`）
   - `datetime`
   - `short_id`
   - `message`
+- `scope` 列の意味:
+  - `M`: マスターコミット（`main` 履歴に含まれる）
+  - `P`: プレメインコミット（`main` 履歴に含まれない）
 - テーブルは各項目境界・各レコード境界を罫線で表示する。
 - 行選択:
   - 行内の任意セルクリックで同じ行を選択できる。
@@ -191,7 +197,8 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
     - コミット一覧上部の詳細サマリ（現在ブランチ/HEAD情報/HEAD変更検出）は表示しない。
   - コミット一覧テーブル（中央）:
     - 表示件数: 10件固定（不足分は空行）
-    - 列: `datetime` `short_id` `message`
+    - 列: `scope` `datetime` `short_id` `message`
+    - 凡例: `M=マスターコミット` / `P=プレメインコミット`
     - 各項目境界・各レコード境界に罫線を表示
     - 行内の任意セルクリックで選択可能
     - HEAD行は薄い緑背景で表示
@@ -209,7 +216,7 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 
 ## 6.1 再現性固定仕様
 - ウィンドウ定数:
-  - 親ウィンドウ初期サイズ: `1000 x 560`（内寸、リサイズ不可）
+  - 親ウィンドウ初期サイズ: `1060 x 560`（内寸、リサイズ不可）
   - プロジェクト変更ダイアログサイズ: 親コンテンツサイズの `90%`
   - プロジェクト変更ダイアログ最小値: `640 x 420`
   - プロジェクト変更ダイアログ: 中央配置、移動不可、リサイズ不可
@@ -221,6 +228,7 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 - テーブル定数:
   - コミット一覧は左右余白を対称にする（左右マージン同値）
   - コミット一覧表示枠: `10行` 固定（不足分は空セル）
+  - `scope` 列幅: `52px`
   - ヘッダ行高: `26px`
   - データ行高: `24px`
   - ヘッダ背景: `rgb(236,236,236)`
@@ -263,7 +271,7 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 - HEAD情報（full id, message, datetime）
 - dirty状態
 - `status_porcelain`
-- コミット一覧（内部最大50、表示10枠固定）
+- コミット一覧（`scope` を含む。内部最大50、表示10枠固定）
 - `previous_head_full_id`（HEAD変更判定用の内部保持値）
 - `consecutive_update_failures`（更新失敗連続回数）
 
@@ -325,7 +333,8 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 - `head_full_id` の差分判定は `git::fetch_snapshot` 内で継続し、HEAD変更時のみコミット一覧を更新する。
 - ヘッダの作業ツリー表示は `dirty` の真偽を `変更中` / `変更なし` に変換して表示する。
 - 素材生成機能の廃止に伴い、素材生成UIと `material` モジュールを削除し、Git詳細差分取得の未使用処理を整理した。
-- コミット一覧テーブルは3列（日時/短縮ID/メッセージ）に整理し、セル境界と行境界を罫線表示した。
+- コミット一覧テーブルは4列（scope/日時/短縮ID/メッセージ）に整理し、セル境界と行境界を罫線表示した。
+- コミット取得は `git log --all` を使用し、main履歴を `M`、それ以外を `P` として同一一覧に表示する。
 - コミット一覧は表示枠を10行固定とし、コミット不足分は空セル行を描画する方式にした。
 - コミット一覧の表示領域は中央寄せし、左右余白が対称になるように調整した。
 - 行選択は各セルをクリック可能とし、HEAD行は薄い緑、選択中行は薄いグレー（優先）で表示する。
@@ -344,6 +353,7 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 - 全ボタンに共通で `2px` の濃色枠線・角丸 `4px`・最小高さ `32px` を適用した。
 - 再現性固定仕様として、ウィンドウ定数・余白定数・テーブル定数・表示優先順位・イベント順序を明文化した。
 - 設定JSONは `scan_scope=direct` 固定、`update_interval_sec` 正規化、`selected_repo_path` 実在判定を固定運用とした。
+- 用語運用として、`コミット` は既定で `scope=P`（プレメインコミット）を指し、`エージェントコミット` は `scope=M` 側（マスターコミット）で扱う。
 
 # 手動テスト結果
 - 未実施。
@@ -369,3 +379,4 @@ target_project_root: `C:\Users\gonec\RustProjects\codex_rollback_bridge`
 - 2026-02-19: 親ウィンドウ高さを560へ拡張し、ボタン枠線を2px濃色で統一した。
 - 2026-02-19: 設定保存先の表記を実装に合わせて `settings.override.json` へ統一した。
 - 2026-02-19: `# 要件定義` 直下に `target_project_root` を明示し、再開時コンテキストを固定した。
+- 2026-02-19: コミット一覧に `scope` 列（`M`/`P`）を追加し、`git log --all` でプレメインコミットも表示する仕様に更新した。

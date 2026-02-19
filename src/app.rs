@@ -217,28 +217,32 @@ impl CodexRollbackBridgeApp {
     fn render_commit_table(&mut self, ui: &mut egui::Ui, snapshot: &RepoSnapshot) {
         const COMMIT_TABLE_SLOTS: usize = 10;
         let available_width = ui.available_width();
-        let table_width = if available_width >= 640.0 {
-            available_width.min(940.0)
+        let table_width = if available_width >= 700.0 {
+            available_width.min(990.0)
         } else {
             available_width
         };
         let side_margin = ((available_width - table_width) * 0.5).max(0.0);
 
+        let scope_width = 52.0;
         let datetime_width = 160.0;
         let short_id_width = 96.0;
-        let message_width = (table_width - datetime_width - short_id_width).max(240.0);
+        let message_width =
+            (table_width - scope_width - datetime_width - short_id_width).max(210.0);
 
         ui.horizontal(|ui| {
             ui.add_space(side_margin);
             ui.vertical(|ui| {
                 ui.set_width(table_width);
                 ui.label("コミット一覧（10枠固定）");
+                ui.label("凡例: M=マスターコミット / P=プレメインコミット");
 
                 let mut clicked_target: Option<String> = None;
                 Grid::new("commit_table_grid")
-                    .num_columns(3)
+                    .num_columns(4)
                     .spacing(egui::vec2(0.0, 0.0))
                     .show(ui, |ui| {
+                        self.render_table_header_cell(ui, "区分", scope_width);
                         self.render_table_header_cell(ui, "日時", datetime_width);
                         self.render_table_header_cell(ui, "短縮ID", short_id_width);
                         self.render_table_header_cell(ui, "メッセージ", message_width);
@@ -254,6 +258,13 @@ impl CodexRollbackBridgeApp {
                                 let is_head = snapshot.head_full_id == commit.full_id;
 
                                 let mut row_clicked = false;
+                                row_clicked |= self.render_table_selectable_cell(
+                                    ui,
+                                    &commit.scope_mark,
+                                    is_selected,
+                                    is_head,
+                                    scope_width,
+                                );
                                 row_clicked |= self.render_table_selectable_cell(
                                     ui,
                                     &commit.datetime,
@@ -280,6 +291,7 @@ impl CodexRollbackBridgeApp {
                                     clicked_target = Some(commit.full_id.clone());
                                 }
                             } else {
+                                self.render_table_empty_cell(ui, scope_width);
                                 self.render_table_empty_cell(ui, datetime_width);
                                 self.render_table_empty_cell(ui, short_id_width);
                                 self.render_table_empty_cell(ui, message_width);
