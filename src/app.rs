@@ -636,7 +636,12 @@ impl CodexRollbackBridgeApp {
                 fallback_message
             }
         };
-        self.open_commit_message_dialog(Self::normalize_message_newlines(message));
+        let normalized_message = Self::normalize_message_newlines(message);
+        self.log(format!(
+            "commit message lines={}",
+            normalized_message.matches('\n').count() + 1
+        ));
+        self.open_commit_message_dialog(normalized_message);
     }
 
     fn normalize_message_newlines(message: String) -> String {
@@ -679,7 +684,7 @@ impl CodexRollbackBridgeApp {
                     .id_salt("commit_message_dialog_scroll")
                     .max_height((dialog_size.y - 92.0).max(96.0))
                     .show(ui, |ui| {
-                        ui.add(egui::Label::new(message.clone()).extend());
+                        ui.add(egui::Label::new(message.clone()).wrap());
                     });
 
                 ui.add_space(6.0);
