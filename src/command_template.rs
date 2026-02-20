@@ -1,6 +1,7 @@
 use crate::models::RepoSnapshot;
 
 fn context_header(snapshot: &RepoSnapshot) -> String {
+    let _ = snapshot.head_message_full.as_str();
     let status_porcelain = if snapshot.status_porcelain.trim().is_empty() {
         "(clean)".to_string()
     } else {

@@ -69,7 +69,10 @@ pub struct CommitInfo {
     pub scope_mark: String,
     pub datetime: String,
     pub short_id: String,
-    pub message: String,
+    #[serde(default, alias = "message")]
+    pub subject: String,
+    #[serde(default)]
+    pub body_full: String,
     pub full_id: String,
 }
 
@@ -79,6 +82,7 @@ pub struct RepoSnapshot {
     pub current_branch: String,
     pub head_full_id: String,
     pub head_message: String,
+    pub head_message_full: String,
     pub head_datetime: String,
     pub dirty: bool,
     pub status_porcelain: String,

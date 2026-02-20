@@ -8,6 +8,8 @@ use std::process::Command;
 
 const GIT_DATE_FORMAT_ARG: &str = "--date=format:%Y/%m/%d %H:%M";
 const MAIN_BRANCH_NAME: &str = "main";
+const RECORD_SEPARATOR: u8 = 0x00;
+const FIELD_SEPARATOR: u8 = 0x1f;
 
 pub fn git_exists() -> bool {
     Command::new("git")
@@ -56,7 +58,7 @@ pub fn fetch_snapshot(
     previous_commits: &[CommitInfo],
 ) -> Result<RepoSnapshot, String> {
     let current_branch = get_current_branch(repo_path)?;
-    let (head_full_id, head_message, head_datetime) = get_head_info(repo_path)?;
+    let (head_full_id, head_message, head_message_full, head_datetime) = get_head_info(repo_path)?;
     let status_porcelain = run_git(repo_path, &["status", "--porcelain"])?;
     let dirty = !status_porcelain.trim().is_empty();
 
@@ -72,6 +74,7 @@ pub fn fetch_snapshot(
         current_branch,
         head_full_id,
         head_message,
+        head_message_full,
         head_datetime,
         dirty,
         status_porcelain,
@@ -125,32 +128,40 @@ fn get_last_commit_datetime(repo_path: &Path) -> Result<String, String> {
     )
 }
 
-fn get_head_info(repo_path: &Path) -> Result<(String, String, String), String> {
-    let output = run_git(
+fn get_head_info(repo_path: &Path) -> Result<(String, String, String, String), String> {
+    let output = run_git_bytes(
         repo_path,
         &[
             "log",
             "-1",
             GIT_DATE_FORMAT_ARG,
-            "--pretty=format:%H%n%s%n%cd",
+            "--pretty=format:%H%x1f%s%x1f%cd%x1f%B%x00",
         ],
     )?;
 
-    let mut lines = output.lines();
-    let head_full_id = lines.next().unwrap_or_default().trim().to_string();
-    let head_message = lines.next().unwrap_or_default().trim().to_string();
-    let head_datetime = lines.next().unwrap_or_default().trim().to_string();
+    let mut records = parse_records(&output, 4)?;
+    let head_record = records
+        .pop()
+        .ok_or_else(|| "HEAD log record is empty".to_string())?;
+    let [head_full_id, head_message, head_datetime, head_message_full] = head_record
+        .try_into()
+        .map_err(|_| "HEAD log record field conversion failed".to_string())?;
 
-    if head_full_id.is_empty() {
+    if head_full_id.trim().is_empty() {
         return Err("HEAD full id is empty".to_string());
     }
 
-    Ok((head_full_id, head_message, head_datetime))
+    Ok((
+        head_full_id,
+        head_message,
+        trim_git_full_message_tail(head_message_full),
+        head_datetime,
+    ))
 }
 
 fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitInfo>, String> {
     let max_count_arg = max_count.to_string();
-    let output = run_git(
+    let output = run_git_bytes(
         repo_path,
         &[
             "log",
@@ -158,32 +169,58 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
             "-n",
             max_count_arg.as_str(),
             GIT_DATE_FORMAT_ARG,
-            "--pretty=format:%H%x1f%h%x1f%cd%x1f%s",
+            "--pretty=format:%H%x1f%h%x1f%cd%x1f%s%x1f%B%x00",
         ],
     )?;
 
     let main_commit_ids = collect_main_commit_ids(repo_path)?;
+    let records = parse_records(&output, 5)?;
 
     let mut commits = Vec::new();
-    for line in output.lines() {
-        let mut parts = line.split('\u{001f}');
-        let full_id = parts.next().unwrap_or_default().to_string();
-        if full_id.is_empty() {
+    for record in records {
+        let [full_id, short_id, datetime, subject, body_full] = record
+            .try_into()
+            .map_err(|_| "commit log record field conversion failed".to_string())?;
+        if full_id.trim().is_empty() {
             continue;
         }
-        let short_id = parts.next().unwrap_or_default().to_string();
-        let datetime = parts.next().unwrap_or_default().to_string();
-        let message = parts.next().unwrap_or_default().to_string();
         commits.push(CommitInfo {
             scope_mark: classify_scope_mark(&main_commit_ids, &full_id).to_string(),
             datetime,
             short_id,
-            message,
+            subject,
+            body_full: trim_git_full_message_tail(body_full),
             full_id,
         });
     }
 
     Ok(commits)
+}
+
+fn parse_records(output: &[u8], expected_fields: usize) -> Result<Vec<Vec<String>>, String> {
+    let mut records = Vec::new();
+    for record in output.split(|byte| *byte == RECORD_SEPARATOR) {
+        if record.is_empty() {
+            continue;
+        }
+        let fields = record
+            .split(|byte| *byte == FIELD_SEPARATOR)
+            .map(|field| String::from_utf8_lossy(field).to_string())
+            .collect::<Vec<_>>();
+        if fields.len() != expected_fields {
+            return Err(format!(
+                "unexpected git log field count: expected={expected_fields} actual={} raw='{}'",
+                fields.len(),
+                String::from_utf8_lossy(record)
+            ));
+        }
+        records.push(fields);
+    }
+    Ok(records)
+}
+
+fn trim_git_full_message_tail(full_message: String) -> String {
+    full_message.trim_end_matches('\n').to_string()
 }
 
 fn collect_main_commit_ids(repo_path: &Path) -> Result<Option<HashSet<String>>, String> {
@@ -269,6 +306,13 @@ fn read_requirement_headline(repo_path: &Path) -> Option<String> {
 }
 
 fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {
+    let stdout = run_git_bytes(repo_path, args)?;
+    Ok(String::from_utf8_lossy(&stdout)
+        .trim_end_matches(['\r', '\n'])
+        .to_string())
+}
+
+fn run_git_bytes(repo_path: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(repo_path)
@@ -286,13 +330,12 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {
         ));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout.trim_end_matches(['\r', '\n']).to_string())
+    Ok(output.stdout)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::classify_scope_mark;
+    use super::{classify_scope_mark, parse_records, trim_git_full_message_tail};
     use std::collections::HashSet;
 
     #[test]
@@ -310,5 +353,25 @@ mod tests {
         let main_ids = Some(ids);
         assert_eq!(classify_scope_mark(&main_ids, "def"), "P");
         assert_eq!(classify_scope_mark(&None, "def"), "P");
+    }
+
+    #[test]
+    fn parse_records_reads_nul_and_us_separated_records() {
+        let bytes = b"full1\x1fshort1\x1f2026/01/01 10:00\x1fsubject1\x1fsubject1\nbody1\n\x00full2\x1fshort2\x1f2026/01/02 11:00\x1fsubject2\x1fsubject2\x00";
+        let records = parse_records(bytes, 5).expect("records should parse");
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0][0], "full1");
+        assert_eq!(records[0][3], "subject1");
+        assert_eq!(records[0][4], "subject1\nbody1\n");
+        assert_eq!(records[1][3], "subject2");
+        assert_eq!(records[1][4], "subject2");
+    }
+
+    #[test]
+    fn trim_git_full_message_tail_removes_only_trailing_newline() {
+        let trimmed = trim_git_full_message_tail("subject\n\nbody\n".to_string());
+        assert_eq!(trimmed, "subject\n\nbody");
+        let unchanged = trim_git_full_message_tail("subject\n\nbody".to_string());
+        assert_eq!(unchanged, "subject\n\nbody");
     }
 }

@@ -382,7 +382,7 @@ impl CodexRollbackBridgeApp {
                                                     let message_clicked = self
                                                         .render_table_selectable_cell(
                                                             ui,
-                                                            &commit.message,
+                                                            &commit.subject,
                                                             is_selected,
                                                             is_master_scope,
                                                             is_head,
@@ -396,7 +396,7 @@ impl CodexRollbackBridgeApp {
                                                     }
                                                     if message_clicked {
                                                         clicked_message =
-                                                            Some(commit.message.clone());
+                                                            Some(commit.body_full.clone());
                                                     }
                                                 } else {
                                                     self.render_table_empty_cell(ui, scope_width);
