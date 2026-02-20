@@ -571,9 +571,11 @@ impl CodexRollbackBridgeApp {
             });
     }
 
-    fn table_row_fill_color(selected: bool, is_master_scope: bool, _is_head: bool) -> Color32 {
+    fn table_row_fill_color(selected: bool, is_master_scope: bool, is_head: bool) -> Color32 {
         if selected {
             Color32::from_rgb(236, 236, 236)
+        } else if is_head {
+            Color32::from_rgb(255, 224, 224)
         } else if is_master_scope {
             Color32::from_rgb(228, 245, 228)
         } else {
@@ -1025,10 +1027,14 @@ mod tests {
     }
 
     #[test]
-    fn table_row_fill_color_uses_master_when_head() {
+    fn table_row_fill_color_sets_head_to_red() {
         assert_eq!(
             CodexRollbackBridgeApp::table_row_fill_color(false, true, true),
-            Color32::from_rgb(228, 245, 228)
+            Color32::from_rgb(255, 224, 224)
+        );
+        assert_eq!(
+            CodexRollbackBridgeApp::table_row_fill_color(false, false, true),
+            Color32::from_rgb(255, 224, 224)
         );
     }
 
