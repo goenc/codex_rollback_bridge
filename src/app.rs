@@ -679,13 +679,7 @@ impl CodexRollbackBridgeApp {
                     .id_salt("commit_message_dialog_scroll")
                     .max_height((dialog_size.y - 92.0).max(96.0))
                     .show(ui, |ui| {
-                        let mut readonly_message = message.clone();
-                        ui.add_sized(
-                            [ui.available_width(), (dialog_size.y - 120.0).max(72.0)],
-                            egui::TextEdit::multiline(&mut readonly_message)
-                                .desired_width(f32::INFINITY)
-                                .interactive(false),
-                        );
+                        ui.add(egui::Label::new(message.clone()).extend());
                     });
 
                 ui.add_space(6.0);
