@@ -83,6 +83,15 @@ pub fn fetch_snapshot(
     })
 }
 
+pub fn get_commit_message_full(repo_path: &Path, commit_id: &str) -> Result<String, String> {
+    let normalized_id = commit_id.trim();
+    if normalized_id.is_empty() {
+        return Err("commit id is empty".to_string());
+    }
+
+    run_git(repo_path, &["show", "-s", "--format=%B", normalized_id])
+}
+
 fn collect_scan_dirs(root: &Path, scope: ScanScope) -> Result<Vec<PathBuf>, String> {
     let mut dirs = vec![root.to_path_buf()];
 

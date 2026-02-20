@@ -294,7 +294,7 @@ impl CodexRollbackBridgeApp {
                     let commits: Vec<_> =
                         snapshot.recent_commits.iter().take(MAX_COMMITS).collect();
                     let mut clicked_target: Option<String> = None;
-                    let mut clicked_message: Option<String> = None;
+                    let mut clicked_message: Option<(String, String)> = None;
 
                     Grid::new("commit_table_header_grid")
                         .num_columns(4)
@@ -393,10 +393,10 @@ impl CodexRollbackBridgeApp {
                                                     if row_clicked {
                                                         clicked_target =
                                                             Some(commit.full_id.clone());
-                                                    }
-                                                    if message_clicked {
-                                                        clicked_message =
-                                                            Some(commit.body_full.clone());
+                                                        clicked_message = Some((
+                                                            commit.full_id.clone(),
+                                                            commit.body_full.clone(),
+                                                        ));
                                                     }
                                                 } else {
                                                     self.render_table_empty_cell(ui, scope_width);
@@ -427,8 +427,12 @@ impl CodexRollbackBridgeApp {
                         self.selected_target_commit = Some(target);
                         self.copy_feedback = None;
                     }
-                    if let Some(message) = clicked_message {
-                        self.open_commit_message_dialog(message);
+                    if let Some((commit_id, fallback_message)) = clicked_message {
+                        self.open_commit_message_dialog_for_commit(
+                            &snapshot.repo_path,
+                            &commit_id,
+                            fallback_message,
+                        );
                     }
                 });
             });
@@ -615,6 +619,32 @@ impl CodexRollbackBridgeApp {
     fn open_commit_message_dialog(&mut self, message: String) {
         self.commit_message_dialog_text = Some(message);
         self.show_commit_message_dialog = true;
+    }
+
+    fn open_commit_message_dialog_for_commit(
+        &mut self,
+        repo_path: &Path,
+        commit_id: &str,
+        fallback_message: String,
+    ) {
+        let message = match git::get_commit_message_full(repo_path, commit_id) {
+            Ok(full_message) => full_message,
+            Err(err) => {
+                self.log(format!(
+                    "コミット全文取得失敗: id={commit_id} reason={err} (fallback使用)"
+                ));
+                fallback_message
+            }
+        };
+        self.open_commit_message_dialog(Self::normalize_message_newlines(message));
+    }
+
+    fn normalize_message_newlines(message: String) -> String {
+        if !message.contains('\r') {
+            return message;
+        }
+        let normalized = message.replace("\r\n", "\n");
+        normalized.replace('\r', "\n")
     }
 
     fn render_commit_message_dialog(&mut self, ctx: &egui::Context) {
@@ -1051,6 +1081,15 @@ mod tests {
         assert_eq!(
             CodexRollbackBridgeApp::table_row_fill_color(false, false, false),
             Color32::from_rgb(252, 252, 252)
+        );
+    }
+
+    #[test]
+    fn normalize_message_newlines_converts_crlf_and_cr_to_lf() {
+        let message = "subject\r\n\r\n- 何を: a\r- 何を: b\n".to_string();
+        assert_eq!(
+            CodexRollbackBridgeApp::normalize_message_newlines(message),
+            "subject\n\n- 何を: a\n- 何を: b\n"
         );
     }
 
