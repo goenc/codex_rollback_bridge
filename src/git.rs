@@ -184,6 +184,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
 
     let main_head_commit_id = get_main_branch_head_commit_id(repo_path)?;
     let main_commit_ids = collect_main_commit_ids(repo_path)?;
+    let (head_full_id, _, _, _) = get_head_info(repo_path)?;
     let records = parse_records(&output, 5)?;
 
     let mut commits = Vec::new();
@@ -195,7 +196,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
             continue;
         }
         commits.push(CommitInfo {
-            scope_mark: build_scope_mark(&main_head_commit_id, &full_id),
+            scope_mark: build_scope_mark(&main_head_commit_id, &full_id, &head_full_id),
             in_main_history: is_main_history_commit(&main_commit_ids, &full_id),
             datetime: format_git_timestamp_or_fallback(&timestamp_raw),
             short_id,
@@ -331,16 +332,23 @@ fn is_main_history_commit(main_commit_ids: &Option<HashSet<String>>, commit_full
         .unwrap_or(false)
 }
 
-fn build_scope_mark(main_head_commit_id: &Option<String>, commit_full_id: &str) -> String {
+fn build_scope_mark(
+    main_head_commit_id: &Option<String>,
+    commit_full_id: &str,
+    head_full_id: &str,
+) -> String {
     let normalized_commit_full_id = commit_full_id.trim();
-    if main_head_commit_id
+    let is_main_head = main_head_commit_id
         .as_ref()
         .map(|main_id| main_id.trim() == normalized_commit_full_id)
-        .unwrap_or(false)
-    {
-        "M".to_string()
-    } else {
-        String::new()
+        .unwrap_or(false);
+    let is_head = head_full_id.trim() == normalized_commit_full_id;
+
+    match (is_main_head, is_head) {
+        (true, true) => "MH".to_string(),
+        (true, false) => "M".to_string(),
+        (false, true) => "H".to_string(),
+        (false, false) => String::new(),
     }
 }
 
@@ -418,18 +426,31 @@ mod tests {
     #[test]
     fn build_scope_mark_returns_m_when_commit_is_main_branch_head() {
         let main_head = Some("abc".to_string());
-        assert_eq!(build_scope_mark(&main_head, "abc"), "M");
+        assert_eq!(build_scope_mark(&main_head, "abc", "def"), "M");
+    }
+
+    #[test]
+    fn build_scope_mark_returns_h_when_commit_is_head() {
+        let main_head = Some("abc".to_string());
+        assert_eq!(build_scope_mark(&main_head, "def", "def"), "H");
+    }
+
+    #[test]
+    fn build_scope_mark_returns_mh_when_commit_is_main_head_and_head() {
+        let main_head = Some("abc".to_string());
+        assert_eq!(build_scope_mark(&main_head, "abc", "abc"), "MH");
     }
 
     #[test]
     fn build_scope_mark_returns_empty_when_commit_is_not_main_branch_head() {
         let main_head = Some("abc".to_string());
-        assert_eq!(build_scope_mark(&main_head, "def"), "");
+        assert_eq!(build_scope_mark(&main_head, "def", "xyz"), "");
     }
 
     #[test]
     fn build_scope_mark_handles_missing_main_branch_as_empty() {
-        assert_eq!(build_scope_mark(&None, "def"), "");
+        assert_eq!(build_scope_mark(&None, "def", "def"), "H");
+        assert_eq!(build_scope_mark(&None, "def", "xyz"), "");
     }
 
     #[test]
