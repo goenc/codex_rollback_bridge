@@ -349,7 +349,7 @@ impl CodexRollbackBridgeApp {
                                                         .unwrap_or(false);
                                                     let is_head =
                                                         snapshot.head_full_id == commit.full_id;
-                                                    let is_master_scope = commit.scope_mark == "M";
+                                                    let is_master_scope = commit.in_main_history;
 
                                                     let mut row_clicked = false;
                                                     row_clicked |= self

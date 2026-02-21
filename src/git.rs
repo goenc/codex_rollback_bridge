@@ -182,8 +182,8 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
         ],
     )?;
 
+    let main_head_commit_id = get_main_branch_head_commit_id(repo_path)?;
     let main_commit_ids = collect_main_commit_ids(repo_path)?;
-    let (head_full_id, _, _, _) = get_head_info(repo_path)?;
     let records = parse_records(&output, 5)?;
 
     let mut commits = Vec::new();
@@ -195,7 +195,8 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
             continue;
         }
         commits.push(CommitInfo {
-            scope_mark: build_scope_mark(&main_commit_ids, &full_id, &head_full_id),
+            scope_mark: build_scope_mark(&main_head_commit_id, &full_id),
+            in_main_history: is_main_history_commit(&main_commit_ids, &full_id),
             datetime: format_git_timestamp_or_fallback(&timestamp_raw),
             short_id,
             subject,
@@ -261,6 +262,32 @@ fn format_git_timestamp_for_display_with_now(
     Some(commit_jst.format(format).to_string())
 }
 
+fn get_main_branch_head_commit_id(repo_path: &Path) -> Result<Option<String>, String> {
+    let branch_ref = format!("refs/heads/{MAIN_BRANCH_NAME}");
+    let output = Command::new("git")
+        .args(["rev-parse", "--verify", branch_ref.as_str()])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|err| format!("failed to launch git (rev-parse): {err}"))?;
+
+    match output.status.code() {
+        Some(0) => {
+            let commit_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if commit_id.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(commit_id))
+            }
+        }
+        Some(1) => Ok(None),
+        _ => Err(format!(
+            "git rev-parse failed: status={} stderr='{}'",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
+}
+
 fn collect_main_commit_ids(repo_path: &Path) -> Result<Option<HashSet<String>>, String> {
     if !local_branch_exists(repo_path, MAIN_BRANCH_NAME)? {
         return Ok(None);
@@ -296,28 +323,25 @@ fn local_branch_exists(repo_path: &Path, branch_name: &str) -> Result<bool, Stri
     }
 }
 
-fn build_scope_mark(
-    main_commit_ids: &Option<HashSet<String>>,
-    commit_full_id: &str,
-    head_full_id: &str,
-) -> String {
+fn is_main_history_commit(main_commit_ids: &Option<HashSet<String>>, commit_full_id: &str) -> bool {
     let normalized_commit_full_id = commit_full_id.trim();
-    let normalized_head_full_id = head_full_id.trim();
-
-    let in_main_history = main_commit_ids
+    main_commit_ids
         .as_ref()
         .map(|ids| ids.contains(normalized_commit_full_id))
-        .unwrap_or(false);
-    let is_head = normalized_commit_full_id == normalized_head_full_id;
+        .unwrap_or(false)
+}
 
-    let mut scope_mark = String::new();
-    if in_main_history {
-        scope_mark.push('M');
+fn build_scope_mark(main_head_commit_id: &Option<String>, commit_full_id: &str) -> String {
+    let normalized_commit_full_id = commit_full_id.trim();
+    if main_head_commit_id
+        .as_ref()
+        .map(|main_id| main_id.trim() == normalized_commit_full_id)
+        .unwrap_or(false)
+    {
+        "M".to_string()
+    } else {
+        String::new()
     }
-    if is_head {
-        scope_mark.push('H');
-    }
-    scope_mark
 }
 
 fn read_requirement_headline(repo_path: &Path) -> Option<String> {
@@ -390,44 +414,22 @@ mod tests {
         parse_records, trim_git_full_message_tail,
     };
     use chrono::{FixedOffset, TimeZone};
-    use std::collections::HashSet;
 
     #[test]
-    fn build_scope_mark_returns_m_when_commit_is_in_main_history_and_not_head() {
-        let mut ids = HashSet::new();
-        ids.insert("abc".to_string());
-        let main_ids = Some(ids);
-        assert_eq!(build_scope_mark(&main_ids, "abc", "def"), "M");
+    fn build_scope_mark_returns_m_when_commit_is_main_branch_head() {
+        let main_head = Some("abc".to_string());
+        assert_eq!(build_scope_mark(&main_head, "abc"), "M");
     }
 
     #[test]
-    fn build_scope_mark_returns_h_when_commit_is_head_and_not_in_main_history() {
-        let mut ids = HashSet::new();
-        ids.insert("abc".to_string());
-        let main_ids = Some(ids);
-        assert_eq!(build_scope_mark(&main_ids, "def", "def"), "H");
+    fn build_scope_mark_returns_empty_when_commit_is_not_main_branch_head() {
+        let main_head = Some("abc".to_string());
+        assert_eq!(build_scope_mark(&main_head, "def"), "");
     }
 
     #[test]
-    fn build_scope_mark_returns_mh_when_commit_is_in_main_history_and_head() {
-        let mut ids = HashSet::new();
-        ids.insert("abc".to_string());
-        let main_ids = Some(ids);
-        assert_eq!(build_scope_mark(&main_ids, "abc", "abc"), "MH");
-    }
-
-    #[test]
-    fn build_scope_mark_returns_empty_when_commit_is_neither_main_nor_head() {
-        let mut ids = HashSet::new();
-        ids.insert("abc".to_string());
-        let main_ids = Some(ids);
-        assert_eq!(build_scope_mark(&main_ids, "def", "xyz"), "");
-    }
-
-    #[test]
-    fn build_scope_mark_handles_missing_main_branch_as_non_main() {
-        assert_eq!(build_scope_mark(&None, "def", "def"), "H");
-        assert_eq!(build_scope_mark(&None, "def", "xyz"), "");
+    fn build_scope_mark_handles_missing_main_branch_as_empty() {
+        assert_eq!(build_scope_mark(&None, "def"), "");
     }
 
     #[test]

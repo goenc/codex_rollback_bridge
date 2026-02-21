@@ -67,6 +67,8 @@ pub struct RepoCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub scope_mark: String,
+    #[serde(default)]
+    pub in_main_history: bool,
     pub datetime: String,
     pub short_id: String,
     #[serde(default, alias = "message")]
