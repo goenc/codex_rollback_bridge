@@ -263,7 +263,7 @@ impl CodexRollbackBridgeApp {
         let side_margin = ((available_width - table_width) * 0.5).max(0.0);
 
         let scope_width = 52.0;
-        let datetime_width = 160.0;
+        let datetime_width = 160.0 * 2.0 / 3.0;
         let short_id_width = 96.0;
         let message_width =
             (table_width - scope_width - datetime_width - short_id_width).max(210.0);
@@ -756,7 +756,7 @@ impl CodexRollbackBridgeApp {
                 } else {
                     let total_width = ui.available_width().max(700.0);
                     let title_width = 240.0;
-                    let datetime_width = 160.0;
+                    let datetime_width = 160.0 * 2.0 / 3.0;
                     let path_width = (total_width - title_width - datetime_width).max(280.0);
                     ScrollArea::vertical()
                         .id_salt("project_candidate_scroll")
