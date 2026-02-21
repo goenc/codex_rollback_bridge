@@ -30,15 +30,6 @@ fn context_header(snapshot: &RepoSnapshot) -> String {
     )
 }
 
-pub fn build_worktree_rollback_command(snapshot: &RepoSnapshot) -> String {
-    let repo_path = snapshot.repo_path.to_string_lossy();
-    let header = context_header(snapshot);
-    format!(
-        "{header}git -C \"{repo_path}\" reset --hard HEAD\n\
-git -C \"{repo_path}\" clean -fd"
-    )
-}
-
 pub fn build_previous_head_rollback_command(snapshot: &RepoSnapshot) -> String {
     let repo_path = snapshot.repo_path.to_string_lossy();
     let header = context_header(snapshot);

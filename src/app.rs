@@ -609,15 +609,6 @@ impl CodexRollbackBridgeApp {
 
     fn render_rollback_buttons(&mut self, ui: &mut egui::Ui, dirty: bool) {
         ui.horizontal(|ui| {
-            let worktree_text = if !dirty {
-                RichText::new("編集ロールバック")
-            } else {
-                RichText::new("編集ロールバック").color(Color32::from_gray(140))
-            };
-            if ui.add_enabled(!dirty, Button::new(worktree_text)).clicked() {
-                self.copy_worktree_rollback_command();
-            }
-
             let previous_head_text = if dirty {
                 RichText::new("1コミット戻す")
             } else {
@@ -930,33 +921,6 @@ impl CodexRollbackBridgeApp {
 
         self.monitor.send(MonitorCommand::SetRepo(repo_path));
         self.save_settings_with_log();
-    }
-
-    fn copy_worktree_rollback_command(&mut self) {
-        let Some(snapshot) = self.snapshot.as_ref() else {
-            self.set_copy_feedback("監視データ未取得のため生成できません", true);
-            self.log("編集ロールバック生成失敗: 監視データ未取得");
-            return;
-        };
-
-        let instruction = command_template::build_worktree_rollback_command(snapshot);
-
-        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(instruction)) {
-            Ok(()) => {
-                self.last_error = None;
-                self.set_copy_feedback(
-                    "編集ロールバックコマンドをクリップボードにコピーしました",
-                    false,
-                );
-                self.log("編集ロールバックコマンドコピー成功");
-            }
-            Err(err) => {
-                let message = format!("クリップボードコピー失敗: {err}");
-                self.last_error = Some(message.clone());
-                self.set_copy_feedback(message.clone(), true);
-                self.log(format!("編集ロールバックコマンドコピー失敗: {err}"));
-            }
-        }
     }
 
     fn copy_previous_head_rollback_command(&mut self) {
