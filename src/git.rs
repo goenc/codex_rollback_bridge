@@ -183,6 +183,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
     )?;
 
     let main_commit_ids = collect_main_commit_ids(repo_path)?;
+    let (head_full_id, _, _, _) = get_head_info(repo_path)?;
     let records = parse_records(&output, 5)?;
 
     let mut commits = Vec::new();
@@ -194,7 +195,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
             continue;
         }
         commits.push(CommitInfo {
-            scope_mark: classify_scope_mark(&main_commit_ids, &full_id).to_string(),
+            scope_mark: build_scope_mark(&main_commit_ids, &full_id, &head_full_id),
             datetime,
             short_id,
             subject,
@@ -267,16 +268,28 @@ fn local_branch_exists(repo_path: &Path, branch_name: &str) -> Result<bool, Stri
     }
 }
 
-fn classify_scope_mark(main_commit_ids: &Option<HashSet<String>>, full_id: &str) -> &'static str {
-    if main_commit_ids
+fn build_scope_mark(
+    main_commit_ids: &Option<HashSet<String>>,
+    commit_full_id: &str,
+    head_full_id: &str,
+) -> String {
+    let normalized_commit_full_id = commit_full_id.trim();
+    let normalized_head_full_id = head_full_id.trim();
+
+    let in_main_history = main_commit_ids
         .as_ref()
-        .map(|ids| ids.contains(full_id))
-        .unwrap_or(false)
-    {
-        "M"
-    } else {
-        "P"
+        .map(|ids| ids.contains(normalized_commit_full_id))
+        .unwrap_or(false);
+    let is_head = normalized_commit_full_id == normalized_head_full_id;
+
+    let mut scope_mark = String::new();
+    if in_main_history {
+        scope_mark.push('M');
     }
+    if is_head {
+        scope_mark.push('H');
+    }
+    scope_mark
 }
 
 fn read_requirement_headline(repo_path: &Path) -> Option<String> {
@@ -344,24 +357,45 @@ fn run_git_bytes(repo_path: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_scope_mark, parse_records, trim_git_full_message_tail};
+    use super::{build_scope_mark, parse_records, trim_git_full_message_tail};
     use std::collections::HashSet;
 
     #[test]
-    fn classify_scope_mark_returns_m_when_commit_is_in_main_history() {
+    fn build_scope_mark_returns_m_when_commit_is_in_main_history_and_not_head() {
         let mut ids = HashSet::new();
         ids.insert("abc".to_string());
         let main_ids = Some(ids);
-        assert_eq!(classify_scope_mark(&main_ids, "abc"), "M");
+        assert_eq!(build_scope_mark(&main_ids, "abc", "def"), "M");
     }
 
     #[test]
-    fn classify_scope_mark_returns_p_when_commit_is_not_in_main_history() {
+    fn build_scope_mark_returns_h_when_commit_is_head_and_not_in_main_history() {
         let mut ids = HashSet::new();
         ids.insert("abc".to_string());
         let main_ids = Some(ids);
-        assert_eq!(classify_scope_mark(&main_ids, "def"), "P");
-        assert_eq!(classify_scope_mark(&None, "def"), "P");
+        assert_eq!(build_scope_mark(&main_ids, "def", "def"), "H");
+    }
+
+    #[test]
+    fn build_scope_mark_returns_mh_when_commit_is_in_main_history_and_head() {
+        let mut ids = HashSet::new();
+        ids.insert("abc".to_string());
+        let main_ids = Some(ids);
+        assert_eq!(build_scope_mark(&main_ids, "abc", "abc"), "MH");
+    }
+
+    #[test]
+    fn build_scope_mark_returns_empty_when_commit_is_neither_main_nor_head() {
+        let mut ids = HashSet::new();
+        ids.insert("abc".to_string());
+        let main_ids = Some(ids);
+        assert_eq!(build_scope_mark(&main_ids, "def", "xyz"), "");
+    }
+
+    #[test]
+    fn build_scope_mark_handles_missing_main_branch_as_non_main() {
+        assert_eq!(build_scope_mark(&None, "def", "def"), "H");
+        assert_eq!(build_scope_mark(&None, "def", "xyz"), "");
     }
 
     #[test]

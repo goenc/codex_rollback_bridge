@@ -276,7 +276,7 @@ impl CodexRollbackBridgeApp {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label("コミット一覧（表示10行 / 最大50件）");
-                        ui.label("凡例: M=マスターコミット / P=プレメインコミット");
+                        ui.label("凡例: M=main履歴 / H=HEAD（両方=MH）");
                     });
                     ui.add_space((table_width - 500.0).max(8.0));
                     self.render_rollback_buttons(ui, dirty);
