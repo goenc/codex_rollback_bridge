@@ -64,6 +64,44 @@ pub struct RepoCandidate {
     pub last_commit_datetime: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkState {
+    Clean,
+    Dirty,
+    Unknown,
+}
+
+impl WorkState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clean => "クリーン",
+            Self::Dirty => "未コミット変更あり",
+            Self::Unknown => "不明",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitOperation {
+    Rebase,
+    Merge,
+    CherryPick,
+    Revert,
+    Bisect,
+}
+
+impl GitOperation {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rebase => "rebase中",
+            Self::Merge => "merge中",
+            Self::CherryPick => "cherry-pick中",
+            Self::Revert => "revert中",
+            Self::Bisect => "bisect中",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub scope_mark: String,
@@ -86,6 +124,8 @@ pub struct RepoSnapshot {
     pub head_message: String,
     pub head_message_full: String,
     pub head_datetime: String,
+    pub work_state: WorkState,
+    pub operation: Option<GitOperation>,
     pub dirty: bool,
     pub status_porcelain: String,
     pub recent_commits: Vec<CommitInfo>,

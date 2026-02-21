@@ -1,4 +1,4 @@
-use crate::models::{CommitInfo, RepoCandidate, RepoSnapshot, ScanScope};
+use crate::models::{CommitInfo, GitOperation, RepoCandidate, RepoSnapshot, ScanScope, WorkState};
 use chrono::{Datelike, FixedOffset, TimeZone, Utc};
 use std::collections::HashSet;
 use std::fs;
@@ -63,6 +63,12 @@ pub fn fetch_snapshot(
     let (head_full_id, head_message, head_message_full, head_datetime) = get_head_info(repo_path)?;
     let status_porcelain = run_git(repo_path, &["status", "--porcelain"])?;
     let dirty = !status_porcelain.trim().is_empty();
+    let work_state = if dirty {
+        WorkState::Dirty
+    } else {
+        WorkState::Clean
+    };
+    let operation = detect_git_operation(repo_path);
 
     let head_changed = previous_head.as_deref() != Some(head_full_id.as_str());
     let recent_commits = if head_changed || previous_commits.is_empty() {
@@ -78,6 +84,8 @@ pub fn fetch_snapshot(
         head_message,
         head_message_full,
         head_datetime,
+        work_state,
+        operation,
         dirty,
         status_porcelain,
         recent_commits,
@@ -287,6 +295,40 @@ fn get_main_branch_head_commit_id(repo_path: &Path) -> Result<Option<String>, St
             String::from_utf8_lossy(&output.stderr).trim()
         )),
     }
+}
+
+fn detect_git_operation(repo_path: &Path) -> Option<GitOperation> {
+    let git_dir = resolve_git_dir(repo_path).ok()?;
+    detect_git_operation_in_git_dir(&git_dir)
+}
+
+fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf, String> {
+    let git_dir_raw = run_git(repo_path, &["rev-parse", "--git-dir"])?;
+    let git_dir = PathBuf::from(git_dir_raw.trim());
+    if git_dir.is_absolute() {
+        Ok(git_dir)
+    } else {
+        Ok(repo_path.join(git_dir))
+    }
+}
+
+fn detect_git_operation_in_git_dir(git_dir: &Path) -> Option<GitOperation> {
+    if git_dir.join("rebase-apply").is_dir() || git_dir.join("rebase-merge").is_dir() {
+        return Some(GitOperation::Rebase);
+    }
+    if git_dir.join("MERGE_HEAD").is_file() {
+        return Some(GitOperation::Merge);
+    }
+    if git_dir.join("CHERRY_PICK_HEAD").is_file() {
+        return Some(GitOperation::CherryPick);
+    }
+    if git_dir.join("REVERT_HEAD").is_file() {
+        return Some(GitOperation::Revert);
+    }
+    if git_dir.join("BISECT_LOG").is_file() || git_dir.join("BISECT_START").is_file() {
+        return Some(GitOperation::Bisect);
+    }
+    None
 }
 
 fn collect_main_commit_ids(repo_path: &Path) -> Result<Option<HashSet<String>>, String> {

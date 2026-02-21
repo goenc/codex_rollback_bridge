@@ -1,7 +1,9 @@
 use crate::command_template;
 use crate::config;
 use crate::git;
-use crate::models::{AppStatus, RepoCandidate, RepoSnapshot, ScanScope, Settings};
+use crate::models::{
+    AppStatus, GitOperation, RepoCandidate, RepoSnapshot, ScanScope, Settings, WorkState,
+};
 use crate::monitor::{MonitorCommand, MonitorController, MonitorEvent};
 use eframe::egui::{self, Button, Color32, Frame, Grid, RichText, ScrollArea, Sense, Stroke};
 use std::fs;
@@ -194,11 +196,26 @@ impl CodexRollbackBridgeApp {
                 self.monitor.send(MonitorCommand::ManualRefresh);
             }
 
+            let work_state = self.displayed_work_state();
+            let operation = self.displayed_operation();
+
             ui.separator();
             ui.colored_label(
                 self.status_color(),
                 RichText::new(format!("状態: {}", self.app_status.label())).strong(),
             );
+            ui.label("｜");
+            ui.colored_label(
+                Self::work_state_color(work_state),
+                RichText::new(format!("作業状態: {}", work_state.label())).strong(),
+            );
+            if let Some(operation) = operation {
+                ui.label("｜");
+                ui.colored_label(
+                    Self::operation_color(),
+                    RichText::new(format!("操作中: {}", operation.label())).strong(),
+                );
+            }
         });
 
         if self.consecutive_failures >= 3 {
@@ -267,19 +284,19 @@ impl CodexRollbackBridgeApp {
         let short_id_width = 96.0;
         let message_width =
             (table_width - scope_width - datetime_width - short_id_width).max(210.0);
+        let can_run_history_action = self.can_run_history_action(snapshot);
 
         ui.horizontal(|ui| {
             ui.add_space(side_margin);
             ui.vertical(|ui| {
                 ui.set_width(table_width);
-                let dirty = snapshot.dirty;
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label("コミット一覧（表示10行 / 最大50件）");
                         ui.label("凡例: M=main履歴 / H=HEAD（両方=MH）");
                     });
                     ui.add_space((table_width - 500.0).max(8.0));
-                    self.render_rollback_buttons(ui, dirty);
+                    self.render_rollback_buttons(ui, can_run_history_action);
                 });
 
                 ui.scope(|ui| {
@@ -607,15 +624,15 @@ impl CodexRollbackBridgeApp {
         }
     }
 
-    fn render_rollback_buttons(&mut self, ui: &mut egui::Ui, dirty: bool) {
+    fn render_rollback_buttons(&mut self, ui: &mut egui::Ui, can_run_history_action: bool) {
         ui.horizontal(|ui| {
-            let previous_head_text = if dirty {
+            let previous_head_text = if can_run_history_action {
                 RichText::new("1コミット戻す")
             } else {
                 RichText::new("1コミット戻す").color(Color32::from_gray(140))
             };
             if ui
-                .add_enabled(dirty, Button::new(previous_head_text))
+                .add_enabled(can_run_history_action, Button::new(previous_head_text))
                 .clicked()
             {
                 self.copy_previous_head_rollback_command();
@@ -846,6 +863,57 @@ impl CodexRollbackBridgeApp {
         }
     }
 
+    fn displayed_work_state(&self) -> WorkState {
+        if self.app_status == AppStatus::Error {
+            return WorkState::Unknown;
+        }
+        self.snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.work_state)
+            .unwrap_or(WorkState::Unknown)
+    }
+
+    fn displayed_operation(&self) -> Option<GitOperation> {
+        if self.app_status == AppStatus::Error {
+            return None;
+        }
+        self.snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.operation)
+    }
+
+    fn work_state_color(work_state: WorkState) -> Color32 {
+        match work_state {
+            WorkState::Clean => Color32::from_rgb(0, 96, 0),
+            WorkState::Dirty => Color32::from_rgb(160, 0, 0),
+            WorkState::Unknown => Color32::from_gray(120),
+        }
+    }
+
+    fn operation_color() -> Color32 {
+        Color32::from_rgb(128, 96, 0)
+    }
+
+    fn can_run_history_action(&self, snapshot: &RepoSnapshot) -> bool {
+        self.app_status != AppStatus::Error
+            && snapshot.work_state == WorkState::Clean
+            && snapshot.operation.is_none()
+    }
+
+    fn history_action_block_reason(&self, snapshot: &RepoSnapshot) -> Option<&'static str> {
+        if self.app_status == AppStatus::Error {
+            return Some("作業状態が不明のため「1コミット戻す」は実行できません");
+        }
+        if snapshot.operation.is_some() {
+            return Some("Git操作中のため「1コミット戻す」は実行できません");
+        }
+        match snapshot.work_state {
+            WorkState::Clean => None,
+            WorkState::Dirty => Some("未コミット変更があるため「1コミット戻す」は実行できません"),
+            WorkState::Unknown => Some("作業状態が不明のため「1コミット戻す」は実行できません"),
+        }
+    }
+
     fn pick_root_folder(&mut self) {
         let mut dialog = rfd::FileDialog::new();
         let current = PathBuf::from(self.root_folder_input.trim());
@@ -930,9 +998,9 @@ impl CodexRollbackBridgeApp {
             return;
         };
 
-        if !snapshot.dirty {
-            self.set_copy_feedback("作業ツリー変更がないため「1コミット戻す」は無効です", true);
-            self.log("1コミット戻す生成失敗: 作業ツリー変更なし");
+        if let Some(reason) = self.history_action_block_reason(snapshot) {
+            self.set_copy_feedback(reason, true);
+            self.log(format!("1コミット戻す生成失敗: {reason}"));
             return;
         }
 
