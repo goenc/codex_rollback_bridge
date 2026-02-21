@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 fn main() -> eframe::Result<()> {
     let project_root = resolve_project_root();
+    let assets_base = paths::resolve_assets_base(&project_root);
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_resizable(false)
@@ -23,7 +24,7 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             apply_readable_light_theme(&cc.egui_ctx);
-            let font_status = font::apply_required_font(&cc.egui_ctx, &project_root);
+            let font_status = font::apply_required_font(&cc.egui_ctx, &assets_base);
             Ok(Box::new(app::CodexRollbackBridgeApp::new(
                 project_root.clone(),
                 font_status,

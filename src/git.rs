@@ -1,4 +1,5 @@
 use crate::models::{CommitInfo, RepoCandidate, RepoSnapshot, ScanScope};
+use chrono::{Datelike, FixedOffset, TimeZone, Utc};
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
@@ -6,7 +7,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const GIT_DATE_FORMAT_ARG: &str = "--date=format:%Y/%m/%d %H:%M";
+const DATETIME_FETCH_FAILED: &str = "(取得失敗)";
+const JST_OFFSET_SECONDS: i32 = 9 * 60 * 60;
 const MAIN_BRANCH_NAME: &str = "main";
 const RECORD_SEPARATOR: u8 = 0x00;
 const FIELD_SEPARATOR: u8 = 0x1f;
@@ -39,7 +41,7 @@ pub fn scan_repositories(root: &Path, scope: ScanScope) -> Result<Vec<RepoCandid
         let requirement_headline =
             read_requirement_headline(&dir).unwrap_or_else(|| "(要件定義書なし)".to_string());
         let last_commit_datetime =
-            get_last_commit_datetime(&dir).unwrap_or_else(|_| "(取得失敗)".to_string());
+            get_last_commit_datetime(&dir).unwrap_or_else(|_| DATETIME_FETCH_FAILED.to_string());
 
         repositories.push(RepoCandidate {
             requirement_headline,
@@ -131,34 +133,33 @@ fn get_current_branch(repo_path: &Path) -> Result<String, String> {
 }
 
 fn get_last_commit_datetime(repo_path: &Path) -> Result<String, String> {
-    run_git(
-        repo_path,
-        &["log", "-1", GIT_DATE_FORMAT_ARG, "--pretty=format:%cd"],
-    )
+    let timestamp_raw = run_git(repo_path, &["log", "-1", "--pretty=format:%ct"])?;
+    Ok(format_git_timestamp_or_fallback(&timestamp_raw))
 }
 
 fn get_head_info(repo_path: &Path) -> Result<(String, String, String, String), String> {
     let output = run_git_bytes(
         repo_path,
-        &[
-            "log",
-            "-1",
-            GIT_DATE_FORMAT_ARG,
-            "--pretty=format:%H%x1f%s%x1f%cd%x1f%B%x00",
-        ],
+        &["log", "-1", "--pretty=format:%H%x1f%s%x1f%ct%x1f%B%x00"],
     )?;
 
     let mut records = parse_records(&output, 4)?;
     let head_record = records
         .pop()
         .ok_or_else(|| "HEAD log record is empty".to_string())?;
-    let [head_full_id, head_message, head_datetime, head_message_full] = head_record
+    let [
+        head_full_id,
+        head_message,
+        head_timestamp_raw,
+        head_message_full,
+    ] = head_record
         .try_into()
         .map_err(|_| "HEAD log record field conversion failed".to_string())?;
 
     if head_full_id.trim().is_empty() {
         return Err("HEAD full id is empty".to_string());
     }
+    let head_datetime = format_git_timestamp_or_fallback(&head_timestamp_raw);
 
     Ok((
         head_full_id,
@@ -177,8 +178,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
             "--all",
             "-n",
             max_count_arg.as_str(),
-            GIT_DATE_FORMAT_ARG,
-            "--pretty=format:%H%x1f%h%x1f%cd%x1f%s%x1f%B%x00",
+            "--pretty=format:%H%x1f%h%x1f%ct%x1f%s%x1f%B%x00",
         ],
     )?;
 
@@ -188,7 +188,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
 
     let mut commits = Vec::new();
     for record in records {
-        let [full_id, short_id, datetime, subject, body_full] = record
+        let [full_id, short_id, timestamp_raw, subject, body_full] = record
             .try_into()
             .map_err(|_| "commit log record field conversion failed".to_string())?;
         if full_id.trim().is_empty() {
@@ -196,7 +196,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
         }
         commits.push(CommitInfo {
             scope_mark: build_scope_mark(&main_commit_ids, &full_id, &head_full_id),
-            datetime,
+            datetime: format_git_timestamp_or_fallback(&timestamp_raw),
             short_id,
             subject,
             body_full: trim_git_full_message_tail(body_full),
@@ -231,6 +231,34 @@ fn parse_records(output: &[u8], expected_fields: usize) -> Result<Vec<Vec<String
 
 fn trim_git_full_message_tail(full_message: String) -> String {
     full_message.trim_end_matches('\n').to_string()
+}
+
+fn format_git_timestamp_or_fallback(timestamp_raw: &str) -> String {
+    format_git_timestamp_for_display(timestamp_raw)
+        .unwrap_or_else(|| DATETIME_FETCH_FAILED.to_string())
+}
+
+fn format_git_timestamp_for_display(timestamp_raw: &str) -> Option<String> {
+    let jst = FixedOffset::east_opt(JST_OFFSET_SECONDS)?;
+    let now_jst = Utc::now().with_timezone(&jst);
+    format_git_timestamp_for_display_with_now(timestamp_raw, now_jst)
+}
+
+fn format_git_timestamp_for_display_with_now(
+    timestamp_raw: &str,
+    now_jst: chrono::DateTime<FixedOffset>,
+) -> Option<String> {
+    let timestamp = timestamp_raw.trim().parse::<i64>().ok()?;
+    let commit_jst = Utc
+        .timestamp_opt(timestamp, 0)
+        .single()?
+        .with_timezone(now_jst.offset());
+    let format = if commit_jst.year() == now_jst.year() {
+        "%m/%d %H:%M"
+    } else {
+        "%y/%m/%d %H:%M"
+    };
+    Some(commit_jst.format(format).to_string())
 }
 
 fn collect_main_commit_ids(repo_path: &Path) -> Result<Option<HashSet<String>>, String> {
@@ -357,7 +385,11 @@ fn run_git_bytes(repo_path: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_scope_mark, parse_records, trim_git_full_message_tail};
+    use super::{
+        JST_OFFSET_SECONDS, build_scope_mark, format_git_timestamp_for_display_with_now,
+        parse_records, trim_git_full_message_tail,
+    };
+    use chrono::{FixedOffset, TimeZone};
     use std::collections::HashSet;
 
     #[test]
@@ -416,5 +448,48 @@ mod tests {
         assert_eq!(trimmed, "subject\n\nbody");
         let unchanged = trim_git_full_message_tail("subject\n\nbody".to_string());
         assert_eq!(unchanged, "subject\n\nbody");
+    }
+
+    #[test]
+    fn format_git_timestamp_for_display_uses_mmdd_when_same_year_in_jst() {
+        let jst = FixedOffset::east_opt(JST_OFFSET_SECONDS).expect("JST offset should exist");
+        let now_jst = jst
+            .with_ymd_and_hms(2026, 2, 21, 16, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let commit_jst = jst
+            .with_ymd_and_hms(2026, 1, 1, 9, 5, 0)
+            .single()
+            .expect("valid datetime");
+        let formatted =
+            format_git_timestamp_for_display_with_now(&commit_jst.timestamp().to_string(), now_jst);
+        assert_eq!(formatted, Some("01/01 09:05".to_string()));
+    }
+
+    #[test]
+    fn format_git_timestamp_for_display_uses_yy_when_year_differs_in_jst() {
+        let jst = FixedOffset::east_opt(JST_OFFSET_SECONDS).expect("JST offset should exist");
+        let now_jst = jst
+            .with_ymd_and_hms(2026, 2, 21, 16, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let commit_jst = jst
+            .with_ymd_and_hms(2025, 12, 31, 23, 59, 0)
+            .single()
+            .expect("valid datetime");
+        let formatted =
+            format_git_timestamp_for_display_with_now(&commit_jst.timestamp().to_string(), now_jst);
+        assert_eq!(formatted, Some("25/12/31 23:59".to_string()));
+    }
+
+    #[test]
+    fn format_git_timestamp_for_display_returns_none_for_invalid_timestamp() {
+        let jst = FixedOffset::east_opt(JST_OFFSET_SECONDS).expect("JST offset should exist");
+        let now_jst = jst
+            .with_ymd_and_hms(2026, 2, 21, 16, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let formatted = format_git_timestamp_for_display_with_now("not-a-number", now_jst);
+        assert_eq!(formatted, None);
     }
 }

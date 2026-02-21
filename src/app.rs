@@ -360,6 +360,7 @@ impl CodexRollbackBridgeApp {
                                                             is_master_scope,
                                                             is_head,
                                                             scope_width,
+                                                            false,
                                                         );
                                                     row_clicked |= self
                                                         .render_table_selectable_cell(
@@ -369,6 +370,7 @@ impl CodexRollbackBridgeApp {
                                                             is_master_scope,
                                                             is_head,
                                                             datetime_width,
+                                                            true,
                                                         );
                                                     row_clicked |= self
                                                         .render_table_selectable_cell(
@@ -378,6 +380,7 @@ impl CodexRollbackBridgeApp {
                                                             is_master_scope,
                                                             is_head,
                                                             short_id_width,
+                                                            false,
                                                         );
                                                     let message_clicked = self
                                                         .render_table_selectable_cell(
@@ -387,6 +390,7 @@ impl CodexRollbackBridgeApp {
                                                             is_master_scope,
                                                             is_head,
                                                             message_width,
+                                                            false,
                                                         );
                                                     row_clicked |= message_clicked;
 
@@ -549,18 +553,34 @@ impl CodexRollbackBridgeApp {
         is_master_scope: bool,
         is_head: bool,
         width: f32,
+        center: bool,
     ) -> bool {
         let fill_color = Self::table_row_fill_color(selected, is_master_scope, is_head);
         Frame::NONE
             .fill(fill_color)
             .stroke(Stroke::new(1.0, Color32::from_rgb(144, 144, 144)))
             .show(ui, |ui| {
-                let response = ui.add_sized(
-                    [width, 24.0],
-                    egui::Label::new(RichText::new(text))
-                        .sense(Sense::click())
-                        .truncate(),
-                );
+                let response = if center {
+                    ui.with_layout(
+                        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                        |ui| {
+                            ui.add_sized(
+                                [width, 24.0],
+                                egui::Label::new(RichText::new(text))
+                                    .sense(Sense::click())
+                                    .truncate(),
+                            )
+                        },
+                    )
+                    .inner
+                } else {
+                    ui.add_sized(
+                        [width, 24.0],
+                        egui::Label::new(RichText::new(text))
+                            .sense(Sense::click())
+                            .truncate(),
+                    )
+                };
                 response.clicked()
             })
             .inner
@@ -766,6 +786,7 @@ impl CodexRollbackBridgeApp {
                                             false,
                                             false,
                                             title_width,
+                                            false,
                                         );
                                         row_clicked |= self.render_table_selectable_cell(
                                             ui,
@@ -774,6 +795,7 @@ impl CodexRollbackBridgeApp {
                                             false,
                                             false,
                                             path_width,
+                                            false,
                                         );
                                         row_clicked |= self.render_table_selectable_cell(
                                             ui,
@@ -782,6 +804,7 @@ impl CodexRollbackBridgeApp {
                                             false,
                                             false,
                                             datetime_width,
+                                            true,
                                         );
                                         if row_clicked {
                                             clicked_index = Some(index);
