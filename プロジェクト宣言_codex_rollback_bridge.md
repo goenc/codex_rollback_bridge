@@ -1,0 +1,4 @@
+Git監視コミット支援アプリ
+codex_rollback_bridge
+C:\Users\gonec\RustProjects\codex_rollback_bridge
+ASSUME_ENVIRONMENT_COMPLETE_ON_RESUME
