@@ -642,9 +642,9 @@ impl CodexRollbackBridgeApp {
     fn render_rollback_buttons(&mut self, ui: &mut egui::Ui, can_run_history_action: bool) {
         ui.horizontal(|ui| {
             let previous_head_text = if can_run_history_action {
-                RichText::new("1コミット戻す")
+                RichText::new("リバート")
             } else {
-                RichText::new("1コミット戻す").color(Color32::from_gray(140))
+                RichText::new("リバート").color(Color32::from_gray(140))
             };
             if ui
                 .add_enabled(can_run_history_action, Button::new(previous_head_text))
@@ -965,15 +965,15 @@ impl CodexRollbackBridgeApp {
 
     fn history_action_block_reason(&self, snapshot: &RepoSnapshot) -> Option<&'static str> {
         if self.app_status == AppStatus::Error {
-            return Some("作業状態が不明のため「1コミット戻す」は実行できません");
+            return Some("作業状態が不明のため「リバート」は実行できません");
         }
         if snapshot.operation.is_some() {
-            return Some("Git操作中のため「1コミット戻す」は実行できません");
+            return Some("Git操作中のため「リバート」は実行できません");
         }
         match snapshot.work_state {
             WorkState::Clean => None,
-            WorkState::Dirty => Some("未コミット変更があるため「1コミット戻す」は実行できません"),
-            WorkState::Unknown => Some("作業状態が不明のため「1コミット戻す」は実行できません"),
+            WorkState::Dirty => Some("未コミット変更があるため「リバート」は実行できません"),
+            WorkState::Unknown => Some("作業状態が不明のため「リバート」は実行できません"),
         }
     }
 
@@ -1086,13 +1086,13 @@ impl CodexRollbackBridgeApp {
     fn copy_previous_head_rollback_command(&mut self) {
         let Some(snapshot) = self.snapshot.as_ref() else {
             self.set_copy_feedback("監視データ未取得のため生成できません", true);
-            self.log("1コミット戻す生成失敗: 監視データ未取得");
+            self.log("リバート生成失敗: 監視データ未取得");
             return;
         };
 
         if let Some(reason) = self.history_action_block_reason(snapshot) {
             self.set_copy_feedback(reason, true);
-            self.log(format!("1コミット戻す生成失敗: {reason}"));
+            self.log(format!("リバート生成失敗: {reason}"));
             return;
         }
 
@@ -1102,16 +1102,16 @@ impl CodexRollbackBridgeApp {
             Ok(()) => {
                 self.last_error = None;
                 self.set_copy_feedback(
-                    "1コミット戻すコマンドをクリップボードにコピーしました",
+                    "リバートコマンドをクリップボードにコピーしました",
                     false,
                 );
-                self.log("1コミット戻すコマンドコピー成功");
+                self.log("リバートコマンドコピー成功");
             }
             Err(err) => {
                 let message = format!("クリップボードコピー失敗: {err}");
                 self.last_error = Some(message.clone());
                 self.set_copy_feedback(message.clone(), true);
-                self.log(format!("1コミット戻すコマンドコピー失敗: {err}"));
+                self.log(format!("リバートコマンドコピー失敗: {err}"));
             }
         }
     }
