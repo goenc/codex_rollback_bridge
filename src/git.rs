@@ -146,6 +146,11 @@ pub fn commit_with_runtime_message(repo_path: &Path) -> Result<String, String> {
     Ok(short_id)
 }
 
+pub fn revert_head(repo_path: &Path) -> Result<String, String> {
+    run_git(repo_path, &["revert", "--no-edit", "HEAD"])?;
+    run_git(repo_path, &["rev-parse", "--short", "HEAD"])
+}
+
 fn clear_runtime_commit_files(repo_path: &Path) -> Result<(), String> {
     let runtime_dir = repo_path.join("runtime");
     let details_path = runtime_dir.join("commit_details.md");

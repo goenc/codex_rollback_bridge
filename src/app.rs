@@ -1,4 +1,3 @@
-use crate::command_template;
 use crate::config;
 use crate::git;
 use crate::models::{
@@ -10,7 +9,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct CopyFeedback {
     message: String,
@@ -40,11 +39,16 @@ pub struct CodexRollbackBridgeApp {
     project_change_dialog_was_open: bool,
     copy_feedback: Option<CopyFeedback>,
     show_commit_confirm_dialog: bool,
+    show_revert_confirm_dialog: bool,
+    revert_confirm_deadline: Option<Instant>,
     show_commit_message_dialog: bool,
     commit_message_dialog_text: Option<String>,
 }
 
 impl CodexRollbackBridgeApp {
+    const REVERT_CONFIRM_COUNTDOWN_SECONDS: u64 = 5;
+    const REVERT_CONFIRM_ZERO_DISPLAY_MILLIS: u64 = 800;
+
     pub fn new(project_root: PathBuf, _font_validation: Result<PathBuf, String>) -> Self {
         let load_result = config::load_settings(&project_root);
         let mut settings = load_result.settings;
@@ -86,6 +90,8 @@ impl CodexRollbackBridgeApp {
             project_change_dialog_was_open: false,
             copy_feedback: None,
             show_commit_confirm_dialog: false,
+            show_revert_confirm_dialog: false,
+            revert_confirm_deadline: None,
             show_commit_message_dialog: false,
             commit_message_dialog_text: None,
         };
@@ -650,7 +656,7 @@ impl CodexRollbackBridgeApp {
                 .add_enabled(can_run_history_action, Button::new(previous_head_text))
                 .clicked()
             {
-                self.copy_previous_head_rollback_command();
+                self.open_revert_confirm_dialog();
             }
         });
     }
@@ -778,6 +784,84 @@ impl CodexRollbackBridgeApp {
             open = false;
         }
         self.show_commit_confirm_dialog = open;
+    }
+
+    fn open_revert_confirm_dialog(&mut self) {
+        self.show_revert_confirm_dialog = true;
+        self.revert_confirm_deadline =
+            Some(Instant::now() + Duration::from_secs(Self::REVERT_CONFIRM_COUNTDOWN_SECONDS));
+    }
+
+    fn revert_confirm_state(&self) -> (String, bool) {
+        let Some(deadline) = self.revert_confirm_deadline else {
+            return ("OK".to_string(), true);
+        };
+        Self::revert_confirm_state_from_deadline(deadline, Instant::now())
+    }
+
+    fn revert_confirm_state_from_deadline(deadline: Instant, now: Instant) -> (String, bool) {
+        if now < deadline {
+            let remaining = deadline.duration_since(now);
+            let remaining_secs = ((remaining.as_millis() + 999) / 1000) as u64;
+            return (remaining_secs.to_string(), false);
+        }
+
+        if now.duration_since(deadline)
+            < Duration::from_millis(Self::REVERT_CONFIRM_ZERO_DISPLAY_MILLIS)
+        {
+            return ("0".to_string(), false);
+        }
+
+        ("OK".to_string(), true)
+    }
+
+    fn render_revert_confirm_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_revert_confirm_dialog {
+            return;
+        }
+
+        let mut open = self.show_revert_confirm_dialog;
+        let mut close_requested = false;
+        let (countdown_text, can_confirm) = self.revert_confirm_state();
+
+        egui::Window::new("リバート確認")
+            .open(&mut open)
+            .collapsible(false)
+            .movable(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .fixed_size(egui::vec2(440.0, 140.0))
+            .show(ctx, |ui| {
+                ui.label("HEADをリバートしてよいですか。");
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("カウントダウン:");
+                    ui.label(RichText::new(countdown_text.as_str()).strong());
+                });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let yes_text = if can_confirm {
+                        RichText::new("はい")
+                    } else {
+                        RichText::new("はい").color(Color32::from_gray(140))
+                    };
+                    if ui.add_enabled(can_confirm, Button::new(yes_text)).clicked() {
+                        self.revert_head_selected_repo();
+                        close_requested = true;
+                    }
+                    if ui.button("いいえ").clicked() {
+                        close_requested = true;
+                    }
+                });
+            });
+
+        if close_requested {
+            open = false;
+        }
+        if !open {
+            self.revert_confirm_deadline = None;
+        }
+        self.show_revert_confirm_dialog = open;
     }
 
     fn render_project_change_dialog(&mut self, ctx: &egui::Context) {
@@ -1042,6 +1126,8 @@ impl CodexRollbackBridgeApp {
         self.snapshot = None;
         self.selected_target_commit = None;
         self.show_commit_confirm_dialog = false;
+        self.show_revert_confirm_dialog = false;
+        self.revert_confirm_deadline = None;
         self.show_commit_message_dialog = false;
         self.commit_message_dialog_text = None;
         self.commit_scroll_offset_y = 0.0;
@@ -1083,37 +1169,44 @@ impl CodexRollbackBridgeApp {
         self.monitor.send(MonitorCommand::ManualRefresh);
     }
 
-    fn copy_previous_head_rollback_command(&mut self) {
+    fn revert_head_selected_repo(&mut self) {
         let Some(snapshot) = self.snapshot.as_ref() else {
-            self.set_copy_feedback("監視データ未取得のため生成できません", true);
-            self.log("リバート生成失敗: 監視データ未取得");
+            self.set_copy_feedback("監視データ未取得のためリバートできません", true);
+            self.log("リバート失敗: 監視データ未取得");
             return;
         };
 
         if let Some(reason) = self.history_action_block_reason(snapshot) {
             self.set_copy_feedback(reason, true);
-            self.log(format!("リバート生成失敗: {reason}"));
+            self.log(format!("リバート失敗: {reason}"));
             return;
         }
 
-        let instruction = command_template::build_previous_head_rollback_command(snapshot);
+        let Some(repo_path) = self.selected_repo_path.clone() else {
+            let message = "プロジェクト未選択のためリバートできません".to_string();
+            self.last_error = Some(message.clone());
+            self.set_copy_feedback(message.clone(), true);
+            self.log(format!("リバート失敗: {message}"));
+            return;
+        };
 
-        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(instruction)) {
-            Ok(()) => {
+        self.app_status = AppStatus::Updating;
+        match git::revert_head(&repo_path) {
+            Ok(short_id) => {
+                let message = format!("リバート完了: {short_id}");
                 self.last_error = None;
-                self.set_copy_feedback(
-                    "リバートコマンドをクリップボードにコピーしました",
-                    false,
-                );
-                self.log("リバートコマンドコピー成功");
+                self.set_copy_feedback(message.clone(), false);
+                self.log(message);
             }
             Err(err) => {
-                let message = format!("クリップボードコピー失敗: {err}");
+                let message = format!("リバート失敗: {err}");
                 self.last_error = Some(message.clone());
                 self.set_copy_feedback(message.clone(), true);
-                self.log(format!("リバートコマンドコピー失敗: {err}"));
+                self.log(message);
             }
         }
+
+        self.monitor.send(MonitorCommand::ManualRefresh);
     }
 
     fn set_copy_feedback(&mut self, message: impl Into<String>, is_error: bool) {
@@ -1182,6 +1275,7 @@ impl eframe::App for CodexRollbackBridgeApp {
             self.render_project_change_dialog(ctx);
         }
         self.render_commit_confirm_dialog(ctx);
+        self.render_revert_confirm_dialog(ctx);
         self.render_commit_message_dialog(ctx);
         self.project_change_dialog_was_open = self.show_project_change_dialog;
 
@@ -1194,6 +1288,7 @@ impl eframe::App for CodexRollbackBridgeApp {
 mod tests {
     use super::CodexRollbackBridgeApp;
     use eframe::egui::Color32;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn table_row_fill_color_prioritizes_selected() {
@@ -1252,5 +1347,36 @@ mod tests {
         assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(11, 10), 11);
         assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(50, 10), 50);
         assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(60, 10), 50);
+    }
+
+    #[test]
+    fn revert_confirm_state_counts_down_before_deadline() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(CodexRollbackBridgeApp::REVERT_CONFIRM_COUNTDOWN_SECONDS);
+        assert_eq!(
+            CodexRollbackBridgeApp::revert_confirm_state_from_deadline(deadline, now),
+            ("5".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn revert_confirm_state_shows_zero_before_ok() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(CodexRollbackBridgeApp::REVERT_CONFIRM_COUNTDOWN_SECONDS);
+        assert_eq!(
+            CodexRollbackBridgeApp::revert_confirm_state_from_deadline(deadline, deadline),
+            ("0".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn revert_confirm_state_enables_confirmation_after_zero() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(CodexRollbackBridgeApp::REVERT_CONFIRM_COUNTDOWN_SECONDS);
+        let ready_time = deadline + Duration::from_millis(CodexRollbackBridgeApp::REVERT_CONFIRM_ZERO_DISPLAY_MILLIS + 1);
+        assert_eq!(
+            CodexRollbackBridgeApp::revert_confirm_state_from_deadline(deadline, ready_time),
+            ("OK".to_string(), true)
+        );
     }
 }
