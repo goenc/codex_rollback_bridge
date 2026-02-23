@@ -102,6 +102,63 @@ pub fn get_commit_message_full(repo_path: &Path, commit_id: &str) -> Result<Stri
     run_git(repo_path, &["show", "-s", "--format=%B", normalized_id])
 }
 
+pub fn commit_with_runtime_message(repo_path: &Path) -> Result<String, String> {
+    let commit_message_path = repo_path.join("runtime").join("commit_message.md");
+    if !commit_message_path.is_file() {
+        return Err(format!(
+            "コミットメッセージファイルが見つかりません: {}",
+            commit_message_path.display()
+        ));
+    }
+
+    let commit_message = fs::read_to_string(&commit_message_path).map_err(|err| {
+        format!(
+            "コミットメッセージファイルの読み込みに失敗しました '{}': {err}",
+            commit_message_path.display()
+        )
+    })?;
+    if commit_message.trim().is_empty() {
+        return Err(format!(
+            "コミットメッセージファイルが空です: {}",
+            commit_message_path.display()
+        ));
+    }
+
+    run_git(repo_path, &["add", "-A"])?;
+
+    let status_porcelain = run_git(repo_path, &["status", "--porcelain"])?;
+    if status_porcelain.trim().is_empty() {
+        return Err("コミット対象の変更がありません".to_string());
+    }
+
+    let commit_message_path_arg = commit_message_path.to_string_lossy().to_string();
+    run_git(
+        repo_path,
+        &["commit", "-F", commit_message_path_arg.as_str()],
+    )?;
+
+    let short_id = run_git(repo_path, &["rev-parse", "--short", "HEAD"])?;
+    if let Err(err) = clear_runtime_commit_files(repo_path) {
+        return Err(format!(
+            "コミットは完了しましたが runtime ファイル初期化に失敗しました: {err} (commit={short_id})"
+        ));
+    }
+    Ok(short_id)
+}
+
+fn clear_runtime_commit_files(repo_path: &Path) -> Result<(), String> {
+    let runtime_dir = repo_path.join("runtime");
+    let details_path = runtime_dir.join("commit_details.md");
+    let message_path = runtime_dir.join("commit_message.md");
+
+    fs::write(&details_path, "")
+        .map_err(|err| format!("commit_details.md の空白化に失敗しました: {err}"))?;
+    fs::write(&message_path, "")
+        .map_err(|err| format!("commit_message.md の空白化に失敗しました: {err}"))?;
+
+    Ok(())
+}
+
 fn collect_scan_dirs(root: &Path, scope: ScanScope) -> Result<Vec<PathBuf>, String> {
     let mut dirs = vec![root.to_path_buf()];
 

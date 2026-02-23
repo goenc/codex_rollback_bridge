@@ -88,6 +88,9 @@ fn worker_loop(
                     state.interval = interval_from_seconds(seconds);
                 }
                 MonitorCommand::ManualRefresh => {
+                    // Manual refresh is expected to recover a stale table view immediately.
+                    state.previous_head = None;
+                    state.previous_commits.clear();
                     refresh_once(&mut state, &event_tx);
                 }
                 MonitorCommand::Stop => break,

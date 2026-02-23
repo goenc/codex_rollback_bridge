@@ -39,6 +39,7 @@ pub struct CodexRollbackBridgeApp {
     show_project_change_dialog: bool,
     project_change_dialog_was_open: bool,
     copy_feedback: Option<CopyFeedback>,
+    show_commit_confirm_dialog: bool,
     show_commit_message_dialog: bool,
     commit_message_dialog_text: Option<String>,
 }
@@ -84,6 +85,7 @@ impl CodexRollbackBridgeApp {
             show_project_change_dialog: selected_repo_path.is_none(),
             project_change_dialog_was_open: false,
             copy_feedback: None,
+            show_commit_confirm_dialog: false,
             show_commit_message_dialog: false,
             commit_message_dialog_text: None,
         };
@@ -194,6 +196,19 @@ impl CodexRollbackBridgeApp {
             {
                 self.app_status = AppStatus::Updating;
                 self.monitor.send(MonitorCommand::ManualRefresh);
+            }
+
+            let can_commit = self.can_run_commit_action();
+            let commit_text = if can_commit {
+                RichText::new("コミット")
+            } else {
+                RichText::new("コミット").color(Color32::from_gray(140))
+            };
+            if ui
+                .add_enabled(can_commit, Button::new(commit_text))
+                .clicked()
+            {
+                self.show_commit_confirm_dialog = true;
             }
 
             let work_state = self.displayed_work_state();
@@ -730,6 +745,41 @@ impl CodexRollbackBridgeApp {
         self.show_commit_message_dialog = open;
     }
 
+    fn render_commit_confirm_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_commit_confirm_dialog {
+            return;
+        }
+
+        let mut open = self.show_commit_confirm_dialog;
+        let mut close_requested = false;
+
+        egui::Window::new("コミット確認")
+            .open(&mut open)
+            .collapsible(false)
+            .movable(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .fixed_size(egui::vec2(420.0, 120.0))
+            .show(ctx, |ui| {
+                ui.label("未コミットの作業をコミットしますか。");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("はい").clicked() {
+                        self.commit_selected_repo();
+                        close_requested = true;
+                    }
+                    if ui.button("いいえ").clicked() {
+                        close_requested = true;
+                    }
+                });
+            });
+
+        if close_requested {
+            open = false;
+        }
+        self.show_commit_confirm_dialog = open;
+    }
+
     fn render_project_change_dialog(&mut self, ctx: &egui::Context) {
         let mut open = self.show_project_change_dialog;
         let mut close_requested = false;
@@ -894,6 +944,19 @@ impl CodexRollbackBridgeApp {
         Color32::from_rgb(128, 96, 0)
     }
 
+    fn can_run_commit_action(&self) -> bool {
+        if !self.git_available || self.app_status == AppStatus::Error {
+            return false;
+        }
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return false;
+        };
+        if snapshot.operation.is_some() {
+            return false;
+        }
+        snapshot.work_state == WorkState::Dirty
+    }
+
     fn can_run_history_action(&self, snapshot: &RepoSnapshot) -> bool {
         self.app_status != AppStatus::Error
             && snapshot.work_state == WorkState::Clean
@@ -978,6 +1041,7 @@ impl CodexRollbackBridgeApp {
         self.selected_repo_path = Some(repo_path.clone());
         self.snapshot = None;
         self.selected_target_commit = None;
+        self.show_commit_confirm_dialog = false;
         self.show_commit_message_dialog = false;
         self.commit_message_dialog_text = None;
         self.commit_scroll_offset_y = 0.0;
@@ -989,6 +1053,34 @@ impl CodexRollbackBridgeApp {
 
         self.monitor.send(MonitorCommand::SetRepo(repo_path));
         self.save_settings_with_log();
+    }
+
+    fn commit_selected_repo(&mut self) {
+        let Some(repo_path) = self.selected_repo_path.clone() else {
+            let message = "プロジェクト未選択のためコミットできません".to_string();
+            self.last_error = Some(message.clone());
+            self.set_copy_feedback(message.clone(), true);
+            self.log(format!("コミット失敗: {message}"));
+            return;
+        };
+
+        self.app_status = AppStatus::Updating;
+        match git::commit_with_runtime_message(&repo_path) {
+            Ok(short_id) => {
+                let message = format!("コミット完了: {short_id}");
+                self.last_error = None;
+                self.set_copy_feedback(message.clone(), false);
+                self.log(message);
+            }
+            Err(err) => {
+                let message = format!("コミット失敗: {err}");
+                self.last_error = Some(message.clone());
+                self.set_copy_feedback(message.clone(), true);
+                self.log(message);
+            }
+        }
+
+        self.monitor.send(MonitorCommand::ManualRefresh);
     }
 
     fn copy_previous_head_rollback_command(&mut self) {
@@ -1089,6 +1181,7 @@ impl eframe::App for CodexRollbackBridgeApp {
         if self.show_project_change_dialog {
             self.render_project_change_dialog(ctx);
         }
+        self.render_commit_confirm_dialog(ctx);
         self.render_commit_message_dialog(ctx);
         self.project_change_dialog_was_open = self.show_project_change_dialog;
 
