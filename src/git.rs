@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DATETIME_FETCH_FAILED: &str = "(取得失敗)";
 const JST_OFFSET_SECONDS: i32 = 9 * 60 * 60;
@@ -103,7 +104,9 @@ pub fn get_commit_message_full(repo_path: &Path, commit_id: &str) -> Result<Stri
 }
 
 pub fn commit_with_runtime_message(repo_path: &Path) -> Result<String, String> {
-    let commit_message_path = repo_path.join("runtime").join("commit_message.md");
+    let runtime_dir = repo_path.join("runtime");
+    let details_path = runtime_dir.join("commit_details.md");
+    let commit_message_path = runtime_dir.join("commit_message.md");
     if !commit_message_path.is_file() {
         return Err(format!(
             "コミットメッセージファイルが見つかりません: {}",
@@ -124,26 +127,23 @@ pub fn commit_with_runtime_message(repo_path: &Path) -> Result<String, String> {
         ));
     }
 
-    run_git(repo_path, &["add", "-A"])?;
+    let backup = RuntimeCommitFilesBackup::capture(&details_path, &commit_message_path)?;
+    clear_runtime_commit_files(repo_path)?;
 
-    let status_porcelain = run_git(repo_path, &["status", "--porcelain"])?;
-    if status_porcelain.trim().is_empty() {
-        return Err("コミット対象の変更がありません".to_string());
+    match commit_after_runtime_cleared(repo_path, &commit_message) {
+        Ok(short_id) => Ok(short_id),
+        Err(CommitExecutionError::NotCommitted(err)) => {
+            if let Err(restore_err) =
+                backup.restore(&details_path, &commit_message_path)
+            {
+                return Err(format!(
+                    "{err} / runtime ファイル復元失敗: {restore_err}"
+                ));
+            }
+            Err(err)
+        }
+        Err(CommitExecutionError::Committed(err)) => Err(err),
     }
-
-    let commit_message_path_arg = commit_message_path.to_string_lossy().to_string();
-    run_git(
-        repo_path,
-        &["commit", "-F", commit_message_path_arg.as_str()],
-    )?;
-
-    let short_id = run_git(repo_path, &["rev-parse", "--short", "HEAD"])?;
-    if let Err(err) = clear_runtime_commit_files(repo_path) {
-        return Err(format!(
-            "コミットは完了しましたが runtime ファイル初期化に失敗しました: {err} (commit={short_id})"
-        ));
-    }
-    Ok(short_id)
 }
 
 pub fn revert_head(repo_path: &Path) -> Result<String, String> {
@@ -162,6 +162,149 @@ fn clear_runtime_commit_files(repo_path: &Path) -> Result<(), String> {
         .map_err(|err| format!("commit_message.md の空白化に失敗しました: {err}"))?;
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct RuntimeCommitFilesBackup {
+    details_content: Option<String>,
+    message_content: Option<String>,
+}
+
+impl RuntimeCommitFilesBackup {
+    fn capture(details_path: &Path, message_path: &Path) -> Result<Self, String> {
+        Ok(Self {
+            details_content: read_optional_runtime_file(details_path, "commit_details.md")?,
+            message_content: read_optional_runtime_file(message_path, "commit_message.md")?,
+        })
+    }
+
+    fn restore(&self, details_path: &Path, message_path: &Path) -> Result<(), String> {
+        restore_optional_runtime_file(
+            details_path,
+            &self.details_content,
+            "commit_details.md",
+        )?;
+        restore_optional_runtime_file(
+            message_path,
+            &self.message_content,
+            "commit_message.md",
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+enum CommitExecutionError {
+    NotCommitted(String),
+    Committed(String),
+}
+
+fn commit_after_runtime_cleared(
+    repo_path: &Path,
+    commit_message: &str,
+) -> Result<String, CommitExecutionError> {
+    run_git(repo_path, &["add", "-A"]).map_err(CommitExecutionError::NotCommitted)?;
+
+    let status_porcelain = run_git(repo_path, &["status", "--porcelain"])
+        .map_err(CommitExecutionError::NotCommitted)?;
+    if status_porcelain.trim().is_empty() {
+        return Err(CommitExecutionError::NotCommitted(
+            "コミット対象の変更がありません".to_string(),
+        ));
+    }
+
+    let temp_message_path =
+        write_temp_commit_message_file(commit_message).map_err(CommitExecutionError::NotCommitted)?;
+    let temp_message_arg = temp_message_path.to_string_lossy().to_string();
+
+    let commit_result = run_git(
+        repo_path,
+        &["commit", "-F", temp_message_arg.as_str()],
+    );
+    let cleanup_result = fs::remove_file(&temp_message_path).map_err(|err| {
+        format!(
+            "一時コミットメッセージファイル削除失敗 '{}': {err}",
+            temp_message_path.display()
+        )
+    });
+
+    if let Err(commit_err) = commit_result {
+        let err = match cleanup_result {
+            Ok(()) => commit_err,
+            Err(cleanup_err) => format!("{commit_err} / {cleanup_err}"),
+        };
+        return Err(CommitExecutionError::NotCommitted(err));
+    }
+
+    if let Err(cleanup_err) = cleanup_result {
+        return Err(CommitExecutionError::Committed(format!(
+            "コミットは完了しましたが {cleanup_err}"
+        )));
+    }
+
+    run_git(repo_path, &["rev-parse", "--short", "HEAD"]).map_err(|err| {
+        CommitExecutionError::Committed(format!(
+            "コミットは完了しましたが short id 取得に失敗しました: {err}"
+        ))
+    })
+}
+
+fn write_temp_commit_message_file(commit_message: &str) -> Result<PathBuf, String> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("一時ファイル用時刻の取得に失敗しました: {err}"))?
+        .as_millis();
+    let mut temp_path = std::env::temp_dir();
+    temp_path.push(format!(
+        "codex_rollback_bridge_commit_message_{}_{}.txt",
+        std::process::id(),
+        millis
+    ));
+    fs::write(&temp_path, commit_message).map_err(|err| {
+        format!(
+            "一時コミットメッセージファイル書き込み失敗 '{}': {err}",
+            temp_path.display()
+        )
+    })?;
+    Ok(temp_path)
+}
+
+fn read_optional_runtime_file(path: &Path, file_label: &str) -> Result<Option<String>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    if !path.is_file() {
+        return Err(format!(
+            "{file_label} がファイルではありません: {}",
+            path.display()
+        ));
+    }
+    fs::read_to_string(path)
+        .map(Some)
+        .map_err(|err| format!("{file_label} の読み込みに失敗しました '{}': {err}", path.display()))
+}
+
+fn restore_optional_runtime_file(
+    path: &Path,
+    original_content: &Option<String>,
+    file_label: &str,
+) -> Result<(), String> {
+    match original_content {
+        Some(content) => fs::write(path, content).map_err(|err| {
+            format!("{file_label} の復元に失敗しました '{}': {err}", path.display())
+        }),
+        None => {
+            if path.exists() {
+                fs::remove_file(path).map_err(|err| {
+                    format!(
+                        "{file_label} の削除復元に失敗しました '{}': {err}",
+                        path.display()
+                    )
+                })?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn collect_scan_dirs(root: &Path, scope: ScanScope) -> Result<Vec<PathBuf>, String> {
