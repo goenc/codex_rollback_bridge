@@ -96,7 +96,7 @@ impl GitOperation {
             Self::Rebase => "rebase中",
             Self::Merge => "merge中",
             Self::CherryPick => "cherry-pick中",
-            Self::Revert => "revert中",
+            Self::Revert => "ロルバ中",
             Self::Bisect => "bisect中",
         }
     }

@@ -146,8 +146,8 @@ pub fn commit_with_runtime_message(repo_path: &Path) -> Result<String, String> {
     }
 }
 
-pub fn revert_head(repo_path: &Path) -> Result<String, String> {
-    run_git(repo_path, &["revert", "--no-edit", "HEAD"])?;
+pub fn reset_head(repo_path: &Path) -> Result<String, String> {
+    run_git(repo_path, &["reset", "--hard", "HEAD~1"])?;
     run_git(repo_path, &["rev-parse", "--short", "HEAD"])
 }
 

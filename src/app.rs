@@ -648,9 +648,9 @@ impl CodexRollbackBridgeApp {
     fn render_rollback_buttons(&mut self, ui: &mut egui::Ui, can_run_history_action: bool) {
         ui.horizontal(|ui| {
             let previous_head_text = if can_run_history_action {
-                RichText::new("リバート")
+                RichText::new("ロルバ")
             } else {
-                RichText::new("リバート").color(Color32::from_gray(140))
+                RichText::new("ロルバ").color(Color32::from_gray(140))
             };
             if ui
                 .add_enabled(can_run_history_action, Button::new(previous_head_text))
@@ -824,7 +824,7 @@ impl CodexRollbackBridgeApp {
         let mut close_requested = false;
         let (countdown_text, can_confirm) = self.revert_confirm_state();
 
-        egui::Window::new("リバート確認")
+        egui::Window::new("ロルバ確認")
             .open(&mut open)
             .collapsible(false)
             .movable(false)
@@ -832,7 +832,7 @@ impl CodexRollbackBridgeApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .fixed_size(egui::vec2(440.0, 140.0))
             .show(ctx, |ui| {
-                ui.label("HEADをリバートしてよいですか。");
+                ui.label("HEADをロルバしてよいですか。");
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label("カウントダウン:");
@@ -1049,15 +1049,15 @@ impl CodexRollbackBridgeApp {
 
     fn history_action_block_reason(&self, snapshot: &RepoSnapshot) -> Option<&'static str> {
         if self.app_status == AppStatus::Error {
-            return Some("作業状態が不明のため「リバート」は実行できません");
+            return Some("作業状態が不明のため「ロルバ」は実行できません");
         }
         if snapshot.operation.is_some() {
-            return Some("Git操作中のため「リバート」は実行できません");
+            return Some("Git操作中のため「ロルバ」は実行できません");
         }
         match snapshot.work_state {
             WorkState::Clean => None,
-            WorkState::Dirty => Some("未コミット変更があるため「リバート」は実行できません"),
-            WorkState::Unknown => Some("作業状態が不明のため「リバート」は実行できません"),
+            WorkState::Dirty => Some("未コミット変更があるため「ロルバ」は実行できません"),
+            WorkState::Unknown => Some("作業状態が不明のため「ロルバ」は実行できません"),
         }
     }
 
@@ -1171,35 +1171,35 @@ impl CodexRollbackBridgeApp {
 
     fn revert_head_selected_repo(&mut self) {
         let Some(snapshot) = self.snapshot.as_ref() else {
-            self.set_copy_feedback("監視データ未取得のためリバートできません", true);
-            self.log("リバート失敗: 監視データ未取得");
+            self.set_copy_feedback("監視データ未取得のためロルバできません", true);
+            self.log("ロルバ失敗: 監視データ未取得");
             return;
         };
 
         if let Some(reason) = self.history_action_block_reason(snapshot) {
             self.set_copy_feedback(reason, true);
-            self.log(format!("リバート失敗: {reason}"));
+            self.log(format!("ロルバ失敗: {reason}"));
             return;
         }
 
         let Some(repo_path) = self.selected_repo_path.clone() else {
-            let message = "プロジェクト未選択のためリバートできません".to_string();
+            let message = "プロジェクト未選択のためロルバできません".to_string();
             self.last_error = Some(message.clone());
             self.set_copy_feedback(message.clone(), true);
-            self.log(format!("リバート失敗: {message}"));
+            self.log(format!("ロルバ失敗: {message}"));
             return;
         };
 
         self.app_status = AppStatus::Updating;
-        match git::revert_head(&repo_path) {
+        match git::reset_head(&repo_path) {
             Ok(short_id) => {
-                let message = format!("リバート完了: {short_id}");
+                let message = format!("ロルバ完了: {short_id}");
                 self.last_error = None;
                 self.set_copy_feedback(message.clone(), false);
                 self.log(message);
             }
             Err(err) => {
-                let message = format!("リバート失敗: {err}");
+                let message = format!("ロルバ失敗: {err}");
                 self.last_error = Some(message.clone());
                 self.set_copy_feedback(message.clone(), true);
                 self.log(message);
