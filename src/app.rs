@@ -300,8 +300,7 @@ impl CodexRollbackBridgeApp {
         let scope_width = 52.0;
         let datetime_width = 160.0 * 2.0 / 3.0;
         let short_id_width = 96.0;
-        let message_width =
-            (table_width - scope_width - datetime_width - short_id_width).max(210.0);
+        let message_width = (table_width * 2.0 / 3.0).max(210.0);
         let can_run_history_action = self.can_run_history_action(snapshot);
 
         ui.horizontal(|ui| {
