@@ -39,13 +39,13 @@ pub fn scan_repositories(root: &Path, scope: ScanScope) -> Result<Vec<RepoCandid
             continue;
         }
 
-        let requirement_headline =
-            read_requirement_headline(&dir).unwrap_or_else(|| "(要件定義書なし)".to_string());
+        let project_name =
+            read_project_name_from_declaration(&dir).unwrap_or_else(|| "(プロジェクト宣言なし)".to_string());
         let last_commit_datetime =
             get_last_commit_datetime(&dir).unwrap_or_else(|_| DATETIME_FETCH_FAILED.to_string());
 
         repositories.push(RepoCandidate {
-            requirement_headline,
+            project_name,
             path: dir,
             last_commit_datetime,
         });
@@ -599,7 +599,7 @@ fn build_scope_mark(
     }
 }
 
-fn read_requirement_headline(repo_path: &Path) -> Option<String> {
+pub fn read_project_name_from_declaration(repo_path: &Path) -> Option<String> {
     let mut definition_files: Vec<PathBuf> = fs::read_dir(repo_path)
         .ok()?
         .filter_map(|entry| entry.ok().map(|item| item.path()))
@@ -607,7 +607,7 @@ fn read_requirement_headline(repo_path: &Path) -> Option<String> {
         .filter(|path| {
             path.file_name()
                 .map(|name| name.to_string_lossy())
-                .map(|name| name.starts_with("要件定義_") && name.ends_with(".md"))
+                .map(|name| name.starts_with("プロジェクト宣言_") && name.ends_with(".md"))
                 .unwrap_or(false)
         })
         .collect();

@@ -5,9 +5,6 @@ use crate::models::{
 };
 use crate::monitor::{MonitorCommand, MonitorController, MonitorEvent};
 use eframe::egui::{self, Button, Color32, Frame, Grid, RichText, ScrollArea, Sense, Stroke};
-use std::fs;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -156,7 +153,7 @@ impl CodexRollbackBridgeApp {
             let current_project_path = self.selected_repo_path.as_ref().cloned();
             let project_name = current_project_path
                 .as_ref()
-                .and_then(|path| Self::read_requirement_headline(path))
+                .and_then(|path| git::read_project_name_from_declaration(path))
                 .or_else(|| {
                     current_project_path
                         .as_ref()
@@ -485,40 +482,6 @@ impl CodexRollbackBridgeApp {
     fn commit_display_row_count(commit_count: usize, visible_rows: usize) -> usize {
         let bounded = commit_count.min(50);
         bounded.max(visible_rows)
-    }
-
-    fn read_requirement_headline(repo_path: &Path) -> Option<String> {
-        let mut definition_files: Vec<PathBuf> = fs::read_dir(repo_path)
-            .ok()?
-            .filter_map(|entry| entry.ok().map(|item| item.path()))
-            .filter(|path| path.is_file())
-            .filter(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy())
-                    .map(|name| name.starts_with("要件定義_") && name.ends_with(".md"))
-                    .unwrap_or(false)
-            })
-            .collect();
-
-        definition_files.sort();
-        for path in definition_files {
-            let Ok(file) = File::open(&path) else {
-                continue;
-            };
-            let mut reader = BufReader::new(file);
-            let mut first_line = String::new();
-            let Ok(read_size) = reader.read_line(&mut first_line) else {
-                continue;
-            };
-            if read_size == 0 {
-                continue;
-            }
-            let trimmed = first_line.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-        None
     }
 
     fn collect_commit_wheel_rows(
@@ -908,7 +871,7 @@ impl CodexRollbackBridgeApp {
                                 .num_columns(3)
                                 .spacing(egui::vec2(0.0, 0.0))
                                 .show(ui, |ui| {
-                                    self.render_table_header_cell(ui, "要件定義1行目", title_width);
+                                    self.render_table_header_cell(ui, "プロジェクト名", title_width);
                                     self.render_table_header_cell(ui, "パス", path_width);
                                     self.render_table_header_cell(
                                         ui,
@@ -923,7 +886,7 @@ impl CodexRollbackBridgeApp {
                                         let mut row_clicked = false;
                                         row_clicked |= self.render_table_selectable_cell(
                                             ui,
-                                            &candidate.requirement_headline,
+                                            &candidate.project_name,
                                             selected,
                                             false,
                                             false,
