@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,10 +15,32 @@ const JST_OFFSET_SECONDS: i32 = 9 * 60 * 60;
 const MAIN_BRANCH_NAME: &str = "main";
 const RECORD_SEPARATOR: u8 = 0x00;
 const FIELD_SEPARATOR: u8 = 0x1f;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn apply_git_spawn_flags(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_git_spawn_flags(_command: &mut Command) {}
+
+fn git_command(args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command.args(args);
+    apply_git_spawn_flags(&mut command);
+    command
+}
+
+fn git_command_in(repo_path: &Path, args: &[&str]) -> Command {
+    let mut command = git_command(args);
+    command.current_dir(repo_path);
+    command
+}
 
 pub fn git_exists() -> bool {
-    Command::new("git")
-        .arg("--version")
+    git_command(&["--version"])
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
@@ -483,9 +507,7 @@ fn format_git_timestamp_for_display_with_now(
 
 fn get_main_branch_head_commit_id(repo_path: &Path) -> Result<Option<String>, String> {
     let branch_ref = format!("refs/heads/{MAIN_BRANCH_NAME}");
-    let output = Command::new("git")
-        .args(["rev-parse", "--verify", branch_ref.as_str()])
-        .current_dir(repo_path)
+    let output = git_command_in(repo_path, &["rev-parse", "--verify", branch_ref.as_str()])
         .output()
         .map_err(|err| format!("failed to launch git (rev-parse): {err}"))?;
 
@@ -559,9 +581,10 @@ fn collect_main_commit_ids(repo_path: &Path) -> Result<Option<HashSet<String>>, 
 
 fn local_branch_exists(repo_path: &Path, branch_name: &str) -> Result<bool, String> {
     let branch_ref = format!("refs/heads/{branch_name}");
-    let output = Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", branch_ref.as_str()])
-        .current_dir(repo_path)
+    let output = git_command_in(
+        repo_path,
+        &["show-ref", "--verify", "--quiet", branch_ref.as_str()],
+    )
         .output()
         .map_err(|err| format!("failed to launch git (show-ref): {err}"))?;
 
@@ -647,9 +670,7 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_bytes(repo_path: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo_path)
+    let output = git_command_in(repo_path, args)
         .output()
         .map_err(|err| format!("failed to launch git ({args:?}): {err}"))?;
 
