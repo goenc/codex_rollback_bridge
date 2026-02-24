@@ -151,6 +151,11 @@ pub fn reset_head(repo_path: &Path) -> Result<String, String> {
     run_git(repo_path, &["rev-parse", "--short", "HEAD"])
 }
 
+pub fn set_main_branch_to_head(repo_path: &Path) -> Result<String, String> {
+    run_git(repo_path, &["branch", "-f", MAIN_BRANCH_NAME, "HEAD"])?;
+    run_git(repo_path, &["rev-parse", "--short", MAIN_BRANCH_NAME])
+}
+
 fn clear_runtime_commit_files(repo_path: &Path) -> Result<(), String> {
     let runtime_dir = repo_path.join("runtime");
     let details_path = runtime_dir.join("commit_details.md");

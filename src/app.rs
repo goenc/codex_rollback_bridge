@@ -38,6 +38,8 @@ pub struct CodexRollbackBridgeApp {
     show_commit_confirm_dialog: bool,
     show_revert_confirm_dialog: bool,
     revert_confirm_deadline: Option<Instant>,
+    show_main_head_confirm_dialog: bool,
+    main_head_confirm_deadline: Option<Instant>,
     show_commit_message_dialog: bool,
     commit_message_dialog_text: Option<String>,
 }
@@ -89,6 +91,8 @@ impl CodexRollbackBridgeApp {
             show_commit_confirm_dialog: false,
             show_revert_confirm_dialog: false,
             revert_confirm_deadline: None,
+            show_main_head_confirm_dialog: false,
+            main_head_confirm_deadline: None,
             show_commit_message_dialog: false,
             commit_message_dialog_text: None,
         };
@@ -620,6 +624,18 @@ impl CodexRollbackBridgeApp {
             {
                 self.open_revert_confirm_dialog();
             }
+
+            let main_to_head_text = if can_run_history_action {
+                RichText::new("mainをHEADにする")
+            } else {
+                RichText::new("mainをHEADにする").color(Color32::from_gray(140))
+            };
+            if ui
+                .add_enabled(can_run_history_action, Button::new(main_to_head_text))
+                .clicked()
+            {
+                self.open_main_head_confirm_dialog();
+            }
         });
     }
 
@@ -754,8 +770,21 @@ impl CodexRollbackBridgeApp {
             Some(Instant::now() + Duration::from_secs(Self::REVERT_CONFIRM_COUNTDOWN_SECONDS));
     }
 
+    fn open_main_head_confirm_dialog(&mut self) {
+        self.show_main_head_confirm_dialog = true;
+        self.main_head_confirm_deadline =
+            Some(Instant::now() + Duration::from_secs(Self::REVERT_CONFIRM_COUNTDOWN_SECONDS));
+    }
+
     fn revert_confirm_state(&self) -> (String, bool) {
         let Some(deadline) = self.revert_confirm_deadline else {
+            return ("OK".to_string(), true);
+        };
+        Self::revert_confirm_state_from_deadline(deadline, Instant::now())
+    }
+
+    fn main_head_confirm_state(&self) -> (String, bool) {
+        let Some(deadline) = self.main_head_confirm_deadline else {
             return ("OK".to_string(), true);
         };
         Self::revert_confirm_state_from_deadline(deadline, Instant::now())
@@ -824,6 +853,55 @@ impl CodexRollbackBridgeApp {
             self.revert_confirm_deadline = None;
         }
         self.show_revert_confirm_dialog = open;
+    }
+
+    fn render_main_head_confirm_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_main_head_confirm_dialog {
+            return;
+        }
+
+        let mut open = self.show_main_head_confirm_dialog;
+        let mut close_requested = false;
+        let (countdown_text, can_confirm) = self.main_head_confirm_state();
+
+        egui::Window::new("main更新確認")
+            .open(&mut open)
+            .collapsible(false)
+            .movable(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .fixed_size(egui::vec2(440.0, 140.0))
+            .show(ctx, |ui| {
+                ui.label("mainブランチをHEADに変更してよいですか。");
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("カウントダウン:");
+                    ui.label(RichText::new(countdown_text.as_str()).strong());
+                });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let yes_text = if can_confirm {
+                        RichText::new("はい")
+                    } else {
+                        RichText::new("はい").color(Color32::from_gray(140))
+                    };
+                    if ui.add_enabled(can_confirm, Button::new(yes_text)).clicked() {
+                        self.set_main_branch_to_head_selected_repo();
+                        close_requested = true;
+                    }
+                    if ui.button("いいえ").clicked() {
+                        close_requested = true;
+                    }
+                });
+            });
+
+        if close_requested {
+            open = false;
+        }
+        if !open {
+            self.main_head_confirm_deadline = None;
+        }
+        self.show_main_head_confirm_dialog = open;
     }
 
     fn render_project_change_dialog(&mut self, ctx: &egui::Context) {
@@ -1023,6 +1101,20 @@ impl CodexRollbackBridgeApp {
         }
     }
 
+    fn move_main_action_block_reason(&self, snapshot: &RepoSnapshot) -> Option<&'static str> {
+        if self.app_status == AppStatus::Error {
+            return Some("作業状態が不明のため「main更新」は実行できません");
+        }
+        if snapshot.operation.is_some() {
+            return Some("Git操作中のため「main更新」は実行できません");
+        }
+        match snapshot.work_state {
+            WorkState::Clean => None,
+            WorkState::Dirty => Some("未コミット変更があるため「main更新」は実行できません"),
+            WorkState::Unknown => Some("作業状態が不明のため「main更新」は実行できません"),
+        }
+    }
+
     fn pick_root_folder(&mut self) {
         let mut dialog = rfd::FileDialog::new();
         let current = PathBuf::from(self.root_folder_input.trim());
@@ -1090,6 +1182,8 @@ impl CodexRollbackBridgeApp {
         self.show_commit_confirm_dialog = false;
         self.show_revert_confirm_dialog = false;
         self.revert_confirm_deadline = None;
+        self.show_main_head_confirm_dialog = false;
+        self.main_head_confirm_deadline = None;
         self.show_commit_message_dialog = false;
         self.commit_message_dialog_text = None;
         self.commit_scroll_offset_y = 0.0;
@@ -1171,6 +1265,46 @@ impl CodexRollbackBridgeApp {
         self.monitor.send(MonitorCommand::ManualRefresh);
     }
 
+    fn set_main_branch_to_head_selected_repo(&mut self) {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            self.set_copy_feedback("監視データ未取得のためmain更新できません", true);
+            self.log("main更新失敗: 監視データ未取得");
+            return;
+        };
+
+        if let Some(reason) = self.move_main_action_block_reason(snapshot) {
+            self.set_copy_feedback(reason, true);
+            self.log(format!("main更新失敗: {reason}"));
+            return;
+        }
+
+        let Some(repo_path) = self.selected_repo_path.clone() else {
+            let message = "プロジェクト未選択のためmain更新できません".to_string();
+            self.last_error = Some(message.clone());
+            self.set_copy_feedback(message.clone(), true);
+            self.log(format!("main更新失敗: {message}"));
+            return;
+        };
+
+        self.app_status = AppStatus::Updating;
+        match git::set_main_branch_to_head(&repo_path) {
+            Ok(short_id) => {
+                let message = format!("main更新完了: {short_id}");
+                self.last_error = None;
+                self.set_copy_feedback(message.clone(), false);
+                self.log(message);
+            }
+            Err(err) => {
+                let message = format!("main更新失敗: {err}");
+                self.last_error = Some(message.clone());
+                self.set_copy_feedback(message.clone(), true);
+                self.log(message);
+            }
+        }
+
+        self.monitor.send(MonitorCommand::ManualRefresh);
+    }
+
     fn set_copy_feedback(&mut self, message: impl Into<String>, is_error: bool) {
         self.copy_feedback = Some(CopyFeedback {
             message: message.into(),
@@ -1238,6 +1372,7 @@ impl eframe::App for CodexRollbackBridgeApp {
         }
         self.render_commit_confirm_dialog(ctx);
         self.render_revert_confirm_dialog(ctx);
+        self.render_main_head_confirm_dialog(ctx);
         self.render_commit_message_dialog(ctx);
         self.project_change_dialog_was_open = self.show_project_change_dialog;
 
