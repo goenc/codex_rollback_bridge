@@ -7,10 +7,18 @@ mod git;
 mod models;
 mod monitor;
 mod paths;
+mod single_instance;
 
 use std::path::{Path, PathBuf};
 
 fn main() -> eframe::Result<()> {
+    let _single_instance_guard =
+        match single_instance::SingleInstanceGuard::try_acquire("CodexRollbackBridge.Singleton") {
+            Ok(Some(guard)) => guard,
+            Ok(None) => return Ok(()),
+            Err(error) => return Err(eframe::Error::AppCreation(Box::new(error))),
+        };
+
     let project_root = resolve_project_root();
     let assets_base = paths::resolve_assets_base(&project_root);
     let native_options = eframe::NativeOptions {
