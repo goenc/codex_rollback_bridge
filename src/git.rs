@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DATETIME_FETCH_FAILED: &str = "(取得失敗)";
 const JST_OFFSET_SECONDS: i32 = 9 * 60 * 60;
 const MAIN_BRANCH_NAME: &str = "main";
+const WORK_BRANCH_NAME: &str = "work";
 const RECORD_SEPARATOR: u8 = 0x00;
 const FIELD_SEPARATOR: u8 = 0x1f;
 #[cfg(target_os = "windows")]
@@ -151,6 +152,8 @@ pub fn commit_with_runtime_message(repo_path: &Path) -> Result<String, String> {
         ));
     }
 
+    ensure_commit_branch_ready(repo_path)?;
+
     let backup = RuntimeCommitFilesBackup::capture(&details_path, &commit_message_path)?;
     clear_runtime_commit_files(repo_path)?;
 
@@ -190,6 +193,25 @@ fn clear_runtime_commit_files(repo_path: &Path) -> Result<(), String> {
     fs::write(&message_path, "")
         .map_err(|err| format!("commit_message.md の空白化に失敗しました: {err}"))?;
 
+    Ok(())
+}
+
+fn ensure_commit_branch_ready(repo_path: &Path) -> Result<(), String> {
+    let current_branch = get_current_branch(repo_path)?;
+    if current_branch.trim() == WORK_BRANCH_NAME {
+        return Ok(());
+    }
+
+    if local_branch_exists(repo_path, WORK_BRANCH_NAME)? {
+        run_git(repo_path, &["switch", WORK_BRANCH_NAME]).map_err(|err| {
+            format!("work ブランチへの切り替えに失敗しました: {err}")
+        })?;
+        return Ok(());
+    }
+
+    run_git(repo_path, &["switch", "-c", WORK_BRANCH_NAME]).map_err(|err| {
+        format!("work ブランチの作成と切り替えに失敗しました: {err}")
+    })?;
     Ok(())
 }
 
