@@ -53,6 +53,7 @@ pub struct CodexRollbackBridgeApp {
 }
 
 impl CodexRollbackBridgeApp {
+    const FIXED_UPDATE_INTERVAL_SECONDS: u64 = 3;
     const REVERT_CONFIRM_COUNTDOWN_SECONDS: u64 = 5;
     const REVERT_CONFIRM_ZERO_DISPLAY_MILLIS: u64 = 800;
     const EXTERNAL_REPO_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -62,6 +63,7 @@ impl CodexRollbackBridgeApp {
         let mut settings = load_result.settings;
         settings.normalize();
         settings.scan_scope = ScanScope::Direct;
+        settings.update_interval_sec = Self::FIXED_UPDATE_INTERVAL_SECONDS;
 
         let default_project_root_text = project_root.to_string_lossy().to_string();
         let root_folder_input = settings
@@ -88,7 +90,7 @@ impl CodexRollbackBridgeApp {
             selected_target_commit: None,
             last_error: None,
             logs: load_result.logs,
-            monitor: MonitorController::new(settings.update_interval_sec),
+            monitor: MonitorController::new(Self::FIXED_UPDATE_INTERVAL_SECONDS),
             config_contract: config::config_contract_line(),
             consecutive_failures: 0,
             commit_scroll_offset_y: 0.0,
@@ -344,32 +346,6 @@ impl CodexRollbackBridgeApp {
         }
 
         ui.add_space(4.0);
-
-        ui.horizontal_wrapped(|ui| {
-            ui.label("更新間隔(秒):");
-            let mut interval = self.settings.update_interval_sec;
-            let response = ui.add(egui::DragValue::new(&mut interval).range(1..=3600));
-            if response.changed() {
-                self.settings.update_interval_sec = interval.clamp(1, 3600);
-                self.monitor.send(MonitorCommand::SetIntervalSeconds(
-                    self.settings.update_interval_sec,
-                ));
-                self.save_settings_with_log();
-            }
-
-            let can_commit = self.can_run_commit_action();
-            let commit_text = if can_commit {
-                RichText::new("コミット")
-            } else {
-                RichText::new("コミット").color(Color32::from_gray(140))
-            };
-            if ui
-                .add_enabled(can_commit, Button::new(commit_text))
-                .clicked()
-            {
-                self.show_commit_confirm_dialog = true;
-            }
-        });
 
         if self.consecutive_failures >= 3 {
             ui.colored_label(
@@ -1159,29 +1135,6 @@ impl CodexRollbackBridgeApp {
         self.show_project_change_dialog = open;
     }
 
-    fn displayed_work_state(&self) -> WorkState {
-        if self.app_status == AppStatus::Error {
-            return WorkState::Unknown;
-        }
-        self.snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.work_state)
-            .unwrap_or(WorkState::Unknown)
-    }
-
-    fn can_run_commit_action(&self) -> bool {
-        if !self.git_available || self.app_status == AppStatus::Error {
-            return false;
-        }
-        let Some(snapshot) = self.snapshot.as_ref() else {
-            return false;
-        };
-        if snapshot.operation.is_some() {
-            return false;
-        }
-        self.displayed_work_state() == WorkState::Dirty
-    }
-
     fn can_run_history_action(&self, snapshot: &RepoSnapshot) -> bool {
         self.app_status != AppStatus::Error
             && snapshot.work_state == WorkState::Clean
@@ -1415,6 +1368,7 @@ impl CodexRollbackBridgeApp {
     }
 
     fn persist_settings(&mut self) -> Result<PathBuf, String> {
+        self.settings.update_interval_sec = Self::FIXED_UPDATE_INTERVAL_SECONDS;
         self.settings.root_folder_path = if self.root_folder_input.trim().is_empty() {
             None
         } else {

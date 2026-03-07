@@ -7,7 +7,6 @@ use std::time::Duration;
 
 pub enum MonitorCommand {
     SetRepo(PathBuf),
-    SetIntervalSeconds(u64),
     ManualRefresh,
     Stop,
 }
@@ -83,9 +82,6 @@ fn worker_loop(
                     state.previous_commits.clear();
                     state.consecutive_failures = 0;
                     refresh_once(&mut state, &event_tx);
-                }
-                MonitorCommand::SetIntervalSeconds(seconds) => {
-                    state.interval = interval_from_seconds(seconds);
                 }
                 MonitorCommand::ManualRefresh => {
                     // Manual refresh is expected to recover a stale table view immediately.
