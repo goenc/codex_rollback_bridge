@@ -38,9 +38,7 @@ pub struct CodexRollbackBridgeApp {
     copy_feedback: Option<CopyFeedback>,
     show_commit_confirm_dialog: bool,
     show_revert_confirm_dialog: bool,
-    revert_confirm_deadline: Option<Instant>,
     show_main_head_confirm_dialog: bool,
-    main_head_confirm_deadline: Option<Instant>,
     show_commit_message_dialog: bool,
     commit_message_dialog_text: Option<String>,
     next_external_repo_poll_at: Instant,
@@ -54,8 +52,6 @@ pub struct CodexRollbackBridgeApp {
 
 impl CodexRollbackBridgeApp {
     const FIXED_UPDATE_INTERVAL_SECONDS: u64 = 3;
-    const REVERT_CONFIRM_COUNTDOWN_SECONDS: u64 = 5;
-    const REVERT_CONFIRM_ZERO_DISPLAY_MILLIS: u64 = 800;
     const EXTERNAL_REPO_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
     pub fn new(project_root: PathBuf, _font_validation: Result<PathBuf, String>) -> Self {
@@ -101,9 +97,7 @@ impl CodexRollbackBridgeApp {
             copy_feedback: None,
             show_commit_confirm_dialog: false,
             show_revert_confirm_dialog: false,
-            revert_confirm_deadline: None,
             show_main_head_confirm_dialog: false,
-            main_head_confirm_deadline: None,
             show_commit_message_dialog: false,
             commit_message_dialog_text: None,
             next_external_repo_poll_at: Instant::now(),
@@ -873,44 +867,10 @@ impl CodexRollbackBridgeApp {
 
     fn open_revert_confirm_dialog(&mut self) {
         self.show_revert_confirm_dialog = true;
-        self.revert_confirm_deadline =
-            Some(Instant::now() + Duration::from_secs(Self::REVERT_CONFIRM_COUNTDOWN_SECONDS));
     }
 
     fn open_main_head_confirm_dialog(&mut self) {
         self.show_main_head_confirm_dialog = true;
-        self.main_head_confirm_deadline =
-            Some(Instant::now() + Duration::from_secs(Self::REVERT_CONFIRM_COUNTDOWN_SECONDS));
-    }
-
-    fn revert_confirm_state(&self) -> (String, bool) {
-        let Some(deadline) = self.revert_confirm_deadline else {
-            return ("OK".to_string(), true);
-        };
-        Self::revert_confirm_state_from_deadline(deadline, Instant::now())
-    }
-
-    fn main_head_confirm_state(&self) -> (String, bool) {
-        let Some(deadline) = self.main_head_confirm_deadline else {
-            return ("OK".to_string(), true);
-        };
-        Self::revert_confirm_state_from_deadline(deadline, Instant::now())
-    }
-
-    fn revert_confirm_state_from_deadline(deadline: Instant, now: Instant) -> (String, bool) {
-        if now < deadline {
-            let remaining = deadline.duration_since(now);
-            let remaining_secs = ((remaining.as_millis() + 999) / 1000) as u64;
-            return (remaining_secs.to_string(), false);
-        }
-
-        if now.duration_since(deadline)
-            < Duration::from_millis(Self::REVERT_CONFIRM_ZERO_DISPLAY_MILLIS)
-        {
-            return ("0".to_string(), false);
-        }
-
-        ("OK".to_string(), true)
     }
 
     fn render_revert_confirm_dialog(&mut self, ctx: &egui::Context) {
@@ -920,7 +880,6 @@ impl CodexRollbackBridgeApp {
 
         let mut open = self.show_revert_confirm_dialog;
         let mut close_requested = false;
-        let (countdown_text, can_confirm) = self.revert_confirm_state();
 
         egui::Window::new("ロルバ確認")
             .open(&mut open)
@@ -930,24 +889,15 @@ impl CodexRollbackBridgeApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .fixed_size(egui::vec2(440.0, 140.0))
             .show(ctx, |ui| {
-                ui.label("HEADをロルバしてよいですか。");
+                ui.label("未コミット変更は破棄されます。実行しますか？");
                 ui.add_space(6.0);
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label("カウントダウン:");
-                    ui.label(RichText::new(countdown_text.as_str()).strong());
-                });
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    let yes_text = if can_confirm {
-                        RichText::new("はい")
-                    } else {
-                        RichText::new("はい").color(Color32::from_gray(140))
-                    };
-                    if ui.add_enabled(can_confirm, Button::new(yes_text)).clicked() {
-                        self.revert_head_selected_repo();
+                    if ui.button("キャンセル").clicked() {
                         close_requested = true;
                     }
-                    if ui.button("いいえ").clicked() {
+                    if ui.button("実行").clicked() {
+                        self.revert_head_selected_repo();
                         close_requested = true;
                     }
                 });
@@ -955,9 +905,6 @@ impl CodexRollbackBridgeApp {
 
         if close_requested {
             open = false;
-        }
-        if !open {
-            self.revert_confirm_deadline = None;
         }
         self.show_revert_confirm_dialog = open;
     }
@@ -969,7 +916,6 @@ impl CodexRollbackBridgeApp {
 
         let mut open = self.show_main_head_confirm_dialog;
         let mut close_requested = false;
-        let (countdown_text, can_confirm) = self.main_head_confirm_state();
 
         egui::Window::new("main更新確認")
             .open(&mut open)
@@ -979,24 +925,15 @@ impl CodexRollbackBridgeApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .fixed_size(egui::vec2(440.0, 140.0))
             .show(ctx, |ui| {
-                ui.label("mainブランチをHEADに変更してよいですか。");
+                ui.label("未コミット変更は破棄されます。実行しますか？");
                 ui.add_space(6.0);
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label("カウントダウン:");
-                    ui.label(RichText::new(countdown_text.as_str()).strong());
-                });
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    let yes_text = if can_confirm {
-                        RichText::new("はい")
-                    } else {
-                        RichText::new("はい").color(Color32::from_gray(140))
-                    };
-                    if ui.add_enabled(can_confirm, Button::new(yes_text)).clicked() {
-                        self.set_main_branch_to_head_selected_repo();
+                    if ui.button("キャンセル").clicked() {
                         close_requested = true;
                     }
-                    if ui.button("いいえ").clicked() {
+                    if ui.button("実行").clicked() {
+                        self.set_main_branch_to_head_selected_repo();
                         close_requested = true;
                     }
                 });
@@ -1004,9 +941,6 @@ impl CodexRollbackBridgeApp {
 
         if close_requested {
             open = false;
-        }
-        if !open {
-            self.main_head_confirm_deadline = None;
         }
         self.show_main_head_confirm_dialog = open;
     }
@@ -1137,7 +1071,7 @@ impl CodexRollbackBridgeApp {
 
     fn can_run_history_action(&self, snapshot: &RepoSnapshot) -> bool {
         self.app_status != AppStatus::Error
-            && snapshot.work_state == WorkState::Clean
+            && snapshot.work_state != WorkState::Unknown
             && snapshot.operation.is_none()
     }
 
@@ -1149,8 +1083,7 @@ impl CodexRollbackBridgeApp {
             return Some("Git操作中のため「ロルバ」は実行できません");
         }
         match snapshot.work_state {
-            WorkState::Clean => None,
-            WorkState::Dirty => Some("未コミット変更があるため「ロルバ」は実行できません"),
+            WorkState::Clean | WorkState::Dirty => None,
             WorkState::Unknown => Some("作業状態が不明のため「ロルバ」は実行できません"),
         }
     }
@@ -1163,8 +1096,7 @@ impl CodexRollbackBridgeApp {
             return Some("Git操作中のため「main更新」は実行できません");
         }
         match snapshot.work_state {
-            WorkState::Clean => None,
-            WorkState::Dirty => Some("未コミット変更があるため「main更新」は実行できません"),
+            WorkState::Clean | WorkState::Dirty => None,
             WorkState::Unknown => Some("作業状態が不明のため「main更新」は実行できません"),
         }
     }
@@ -1235,9 +1167,7 @@ impl CodexRollbackBridgeApp {
         self.selected_target_commit = None;
         self.show_commit_confirm_dialog = false;
         self.show_revert_confirm_dialog = false;
-        self.revert_confirm_deadline = None;
         self.show_main_head_confirm_dialog = false;
-        self.main_head_confirm_deadline = None;
         self.show_commit_message_dialog = false;
         self.commit_message_dialog_text = None;
         self.commit_scroll_offset_y = 0.0;
@@ -1469,7 +1399,6 @@ impl eframe::App for CodexRollbackBridgeApp {
 mod tests {
     use super::CodexRollbackBridgeApp;
     use eframe::egui::Color32;
-    use std::time::{Duration, Instant};
 
     #[test]
     fn table_row_fill_color_prioritizes_selected() {
@@ -1530,34 +1459,4 @@ mod tests {
         assert_eq!(CodexRollbackBridgeApp::commit_display_row_count(60, 10), 50);
     }
 
-    #[test]
-    fn revert_confirm_state_counts_down_before_deadline() {
-        let now = Instant::now();
-        let deadline = now + Duration::from_secs(CodexRollbackBridgeApp::REVERT_CONFIRM_COUNTDOWN_SECONDS);
-        assert_eq!(
-            CodexRollbackBridgeApp::revert_confirm_state_from_deadline(deadline, now),
-            ("5".to_string(), false)
-        );
-    }
-
-    #[test]
-    fn revert_confirm_state_shows_zero_before_ok() {
-        let now = Instant::now();
-        let deadline = now + Duration::from_secs(CodexRollbackBridgeApp::REVERT_CONFIRM_COUNTDOWN_SECONDS);
-        assert_eq!(
-            CodexRollbackBridgeApp::revert_confirm_state_from_deadline(deadline, deadline),
-            ("0".to_string(), false)
-        );
-    }
-
-    #[test]
-    fn revert_confirm_state_enables_confirmation_after_zero() {
-        let now = Instant::now();
-        let deadline = now + Duration::from_secs(CodexRollbackBridgeApp::REVERT_CONFIRM_COUNTDOWN_SECONDS);
-        let ready_time = deadline + Duration::from_millis(CodexRollbackBridgeApp::REVERT_CONFIRM_ZERO_DISPLAY_MILLIS + 1);
-        assert_eq!(
-            CodexRollbackBridgeApp::revert_confirm_state_from_deadline(deadline, ready_time),
-            ("OK".to_string(), true)
-        );
-    }
 }
