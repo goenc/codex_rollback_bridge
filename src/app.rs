@@ -5,8 +5,9 @@ use crate::models::{
 };
 use crate::monitor::{MonitorCommand, MonitorController, MonitorEvent};
 use eframe::egui::{self, Button, Color32, Frame, Grid, RichText, ScrollArea, Sense, Stroke};
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 struct CopyFeedback {
     message: String,
@@ -44,7 +45,11 @@ pub struct CodexRollbackBridgeApp {
     commit_message_dialog_text: Option<String>,
     next_external_repo_poll_at: Instant,
     last_external_repo_file_value: Option<Option<String>>,
+    last_external_repo_poll_path: Option<PathBuf>,
+    last_external_repo_modified_at: Option<Option<SystemTime>>,
     last_external_repo_read_error: Option<String>,
+    external_repo_path_info: Option<config::ExternalSelectedRepoPathInfo>,
+    external_repo_force_fallback: bool,
 }
 
 impl CodexRollbackBridgeApp {
@@ -101,7 +106,11 @@ impl CodexRollbackBridgeApp {
             commit_message_dialog_text: None,
             next_external_repo_poll_at: Instant::now(),
             last_external_repo_file_value: None,
+            last_external_repo_poll_path: None,
+            last_external_repo_modified_at: None,
             last_external_repo_read_error: None,
+            external_repo_path_info: None,
+            external_repo_force_fallback: false,
         };
 
         if !app.git_available {
@@ -118,7 +127,7 @@ impl CodexRollbackBridgeApp {
         }
         app.poll_external_selected_repo_path(true);
         if app.selected_repo_path.is_some() {
-            app.save_external_selected_repo_with_log();
+            app.save_external_selected_repo_with_log(true);
         }
 
         app.log(app.config_contract.clone());
@@ -165,7 +174,81 @@ impl CodexRollbackBridgeApp {
         }
         self.next_external_repo_poll_at = now + Self::EXTERNAL_REPO_POLL_INTERVAL;
 
-        let external_value = match config::load_external_selected_repo_path() {
+        let path_info = match config::resolve_external_selected_repo_path(self.external_repo_force_fallback)
+        {
+            Ok(path_info) => path_info,
+            Err(err) => {
+                let should_log = self
+                    .last_external_repo_read_error
+                    .as_ref()
+                    .map(|previous| previous != &err)
+                    .unwrap_or(true);
+                if should_log {
+                    self.log(format!("外部選択ファイルパス解決失敗: {err}"));
+                }
+                self.last_external_repo_read_error = Some(err);
+                return;
+            }
+        };
+        self.external_repo_path_info = Some(path_info.clone());
+
+        let modified_at = match fs::metadata(&path_info.path) {
+            Ok(metadata) => match metadata.modified() {
+                Ok(modified_at) => Some(modified_at),
+                Err(err) => {
+                    let message = format!(
+                        "外部選択ファイル更新時刻取得失敗 '{}': {err}",
+                        path_info.path.display()
+                    );
+                    let should_log = self
+                        .last_external_repo_read_error
+                        .as_ref()
+                        .map(|previous| previous != &message)
+                        .unwrap_or(true);
+                    if should_log {
+                        self.log(message.clone());
+                    }
+                    self.last_external_repo_read_error = Some(message);
+                    return;
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => {
+                let message =
+                    format!("外部選択ファイル状態取得失敗 '{}': {err}", path_info.path.display());
+                let should_log = self
+                    .last_external_repo_read_error
+                    .as_ref()
+                    .map(|previous| previous != &message)
+                    .unwrap_or(true);
+                if should_log {
+                    self.log(message.clone());
+                }
+                self.last_external_repo_read_error = Some(message);
+                return;
+            }
+        };
+
+        let path_changed = self
+            .last_external_repo_poll_path
+            .as_ref()
+            .map(|previous| previous != &path_info.path)
+            .unwrap_or(true);
+        let modified_changed = self
+            .last_external_repo_modified_at
+            .as_ref()
+            .map(|previous| previous != &modified_at)
+            .unwrap_or(true);
+
+        if !force && !path_changed && !modified_changed {
+            return;
+        }
+
+        self.last_external_repo_poll_path = Some(path_info.path.clone());
+        self.last_external_repo_modified_at = Some(modified_at);
+
+        let external_value = match config::load_external_selected_repo_path_from_file(&path_info.path)
+        {
             Ok(value) => {
                 self.last_external_repo_read_error = None;
                 value
@@ -247,6 +330,18 @@ impl CodexRollbackBridgeApp {
             ui.separator();
             ui.label(format!("フォルダ: {folder_name}"));
         });
+        if let Some(path_info) = &self.external_repo_path_info {
+            let suffix = if path_info.using_fallback {
+                " (fallback)"
+            } else {
+                ""
+            };
+            ui.label(format!(
+                "外部連携ファイル: {}{}",
+                path_info.path.display(),
+                suffix
+            ));
+        }
 
         ui.add_space(4.0);
 
@@ -1266,7 +1361,7 @@ impl CodexRollbackBridgeApp {
 
         self.monitor.send(MonitorCommand::SetRepo(repo_path));
         self.save_settings_with_log();
-        self.save_external_selected_repo_with_log();
+        self.save_external_selected_repo_with_log(false);
     }
 
     fn commit_selected_repo(&mut self) {
@@ -1411,16 +1506,26 @@ impl CodexRollbackBridgeApp {
         }
     }
 
-    fn save_external_selected_repo_with_log(&mut self) {
-        match config::save_external_selected_repo_path(self.selected_repo_path.as_deref()) {
-            Ok(path) => {
+    fn save_external_selected_repo_with_log(&mut self, quiet: bool) {
+        match config::save_external_selected_repo_path(self.selected_repo_path.as_deref(), true) {
+            Ok(result) => {
+                let path_info = result.path_info;
+                let path = path_info.path.clone();
+                self.external_repo_force_fallback = path_info.using_fallback;
+                self.external_repo_path_info = Some(path_info);
                 self.last_external_repo_file_value = Some(
                     self.selected_repo_path
                         .as_ref()
                         .map(|selected| selected.to_string_lossy().to_string()),
                 );
+                self.last_external_repo_poll_path = Some(path.clone());
+                self.last_external_repo_modified_at =
+                    Some(fs::metadata(&path).ok().and_then(|metadata| metadata.modified().ok()));
                 self.last_external_repo_read_error = None;
-                self.log(format!("外部選択保存: {}", path.display()));
+
+                if !quiet && result.changed {
+                    self.log(format!("外部選択保存: {}", path.display()));
+                }
             }
             Err(err) => {
                 self.log(format!("外部選択保存失敗: {err}"));

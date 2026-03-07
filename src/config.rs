@@ -6,6 +6,18 @@ use std::path::{Path, PathBuf};
 
 const EXTERNAL_SELECTED_REPO_FILE: &str = "selected_repo_path.txt";
 
+#[derive(Debug, Clone)]
+pub struct ExternalSelectedRepoPathInfo {
+    pub path: PathBuf,
+    pub using_fallback: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveExternalSelectedRepoResult {
+    pub path_info: ExternalSelectedRepoPathInfo,
+    pub changed: bool,
+}
+
 pub struct LoadSettingsResult {
     pub settings: Settings,
     pub logs: Vec<String>,
@@ -55,14 +67,31 @@ pub fn runtime_override_path() -> Result<PathBuf, String> {
         .join(paths::SETTINGS_OVERRIDE_FILE))
 }
 
-pub fn external_selected_repo_path_file() -> Result<PathBuf, String> {
-    let mut path = runtime_override_path()?;
-    path.set_file_name(EXTERNAL_SELECTED_REPO_FILE);
-    Ok(path)
+pub fn resolve_external_selected_repo_path(use_fallback: bool) -> Result<ExternalSelectedRepoPathInfo, String> {
+    let primary = primary_external_selected_repo_path()?;
+    let fallback = fallback_external_selected_repo_path()?;
+
+    if use_fallback {
+        return Ok(ExternalSelectedRepoPathInfo {
+            path: fallback,
+            using_fallback: true,
+        });
+    }
+
+    if primary.exists() || !fallback.exists() {
+        return Ok(ExternalSelectedRepoPathInfo {
+            path: primary,
+            using_fallback: false,
+        });
+    }
+
+    Ok(ExternalSelectedRepoPathInfo {
+        path: fallback,
+        using_fallback: true,
+    })
 }
 
-pub fn load_external_selected_repo_path() -> Result<Option<String>, String> {
-    let path = external_selected_repo_path_file()?;
+pub fn load_external_selected_repo_path_from_file(path: &Path) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
@@ -75,19 +104,78 @@ pub fn load_external_selected_repo_path() -> Result<Option<String>, String> {
     Ok(normalize_external_selected_repo_path(&contents))
 }
 
-pub fn save_external_selected_repo_path(selected_repo_path: Option<&Path>) -> Result<PathBuf, String> {
-    let path = external_selected_repo_path_file()?;
+pub fn save_external_selected_repo_path(
+    selected_repo_path: Option<&Path>,
+    allow_fallback: bool,
+) -> Result<SaveExternalSelectedRepoResult, String> {
+    let desired_text = selected_repo_path
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let primary = primary_external_selected_repo_path()?;
+    match write_external_selected_repo_if_changed(&primary, &desired_text) {
+        Ok(changed) => {
+            return Ok(SaveExternalSelectedRepoResult {
+                path_info: ExternalSelectedRepoPathInfo {
+                    path: primary,
+                    using_fallback: false,
+                },
+                changed,
+            });
+        }
+        Err(primary_err) => {
+            if !allow_fallback {
+                return Err(primary_err);
+            }
+
+            let fallback = fallback_external_selected_repo_path()?;
+            match write_external_selected_repo_if_changed(&fallback, &desired_text) {
+                Ok(changed) => Ok(SaveExternalSelectedRepoResult {
+                    path_info: ExternalSelectedRepoPathInfo {
+                        path: fallback,
+                        using_fallback: true,
+                    },
+                    changed,
+                }),
+                Err(fallback_err) => Err(format!(
+                    "primary write failed: {primary_err}; fallback write failed: {fallback_err}"
+                )),
+            }
+        }
+    }
+}
+
+fn primary_external_selected_repo_path() -> Result<PathBuf, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|err| format!("current_exe failed: {err}"))?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| format!("exe parent unavailable: {}", exe_path.display()))?;
+    Ok(exe_dir.join("runtime").join(EXTERNAL_SELECTED_REPO_FILE))
+}
+
+fn fallback_external_selected_repo_path() -> Result<PathBuf, String> {
+    let mut path = runtime_override_path()?;
+    path.set_file_name(EXTERNAL_SELECTED_REPO_FILE);
+    Ok(path)
+}
+
+fn write_external_selected_repo_if_changed(path: &Path, desired_text: &str) -> Result<bool, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create external selected repo directory: {err}"))?;
     }
 
-    let contents = selected_repo_path
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_default();
-    fs::write(&path, contents)
+    if path.is_file() {
+        let existing = fs::read_to_string(path)
+            .map_err(|err| format!("external selected repo path read failed '{}': {err}", path.display()))?;
+        if existing == desired_text {
+            return Ok(false);
+        }
+    }
+
+    fs::write(path, desired_text)
         .map_err(|err| format!("external selected repo path write failed '{}': {err}", path.display()))?;
-    Ok(path)
+    Ok(true)
 }
 
 pub fn load_settings(project_root: &Path) -> LoadSettingsResult {
