@@ -1,7 +1,7 @@
 use crate::config;
 use crate::git;
 use crate::models::{
-    AppStatus, GitOperation, RepoCandidate, RepoSnapshot, ScanScope, Settings, WorkState,
+    AppStatus, RepoCandidate, RepoSnapshot, ScanScope, Settings, WorkState,
 };
 use crate::monitor::{MonitorCommand, MonitorController, MonitorEvent};
 use eframe::egui::{self, Button, Color32, Frame, Grid, RichText, ScrollArea, Sense, Stroke};
@@ -12,25 +12,6 @@ use std::time::{Duration, Instant, SystemTime};
 struct CopyFeedback {
     message: String,
     is_error: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DiffDisplayState {
-    SourceChanged,
-    RuntimeOnly,
-    NoDiff,
-    Unknown,
-}
-
-impl DiffDisplayState {
-    fn label(self) -> &'static str {
-        match self {
-            Self::SourceChanged => "ソース変更あり",
-            Self::RuntimeOnly => "runtime変更のみ",
-            Self::NoDiff => "差分なし",
-            Self::Unknown => "不明",
-        }
-    }
 }
 
 pub struct CodexRollbackBridgeApp {
@@ -387,27 +368,6 @@ impl CodexRollbackBridgeApp {
                 .clicked()
             {
                 self.show_commit_confirm_dialog = true;
-            }
-
-            let diff_state = self.displayed_diff_state();
-            let operation = self.displayed_operation();
-
-            ui.separator();
-            ui.colored_label(
-                self.status_color(),
-                RichText::new(format!("状態: {}", self.app_status.label())).strong(),
-            );
-            ui.label("｜");
-            ui.colored_label(
-                Self::diff_state_color(diff_state),
-                RichText::new(format!("差分状態: {}", diff_state.label())).strong(),
-            );
-            if let Some(operation) = operation {
-                ui.label("｜");
-                ui.colored_label(
-                    Self::operation_color(),
-                    RichText::new(format!("操作中: {}", operation.label())).strong(),
-                );
             }
         });
 
@@ -1199,15 +1159,6 @@ impl CodexRollbackBridgeApp {
         self.show_project_change_dialog = open;
     }
 
-    fn status_color(&self) -> Color32 {
-        match self.app_status {
-            AppStatus::ProjectUnselected => Color32::from_rgb(0, 0, 0),
-            AppStatus::Selected => Color32::from_rgb(0, 96, 0),
-            AppStatus::Updating => Color32::from_rgb(128, 96, 0),
-            AppStatus::Error => Color32::from_rgb(160, 0, 0),
-        }
-    }
-
     fn displayed_work_state(&self) -> WorkState {
         if self.app_status == AppStatus::Error {
             return WorkState::Unknown;
@@ -1216,44 +1167,6 @@ impl CodexRollbackBridgeApp {
             .as_ref()
             .map(|snapshot| snapshot.work_state)
             .unwrap_or(WorkState::Unknown)
-    }
-
-    fn displayed_diff_state(&self) -> DiffDisplayState {
-        if self.app_status == AppStatus::Error {
-            return DiffDisplayState::Unknown;
-        }
-        let Some(snapshot) = self.snapshot.as_ref() else {
-            return DiffDisplayState::Unknown;
-        };
-        if snapshot.has_source_changes {
-            DiffDisplayState::SourceChanged
-        } else if snapshot.has_runtime_changes {
-            DiffDisplayState::RuntimeOnly
-        } else {
-            DiffDisplayState::NoDiff
-        }
-    }
-
-    fn displayed_operation(&self) -> Option<GitOperation> {
-        if self.app_status == AppStatus::Error {
-            return None;
-        }
-        self.snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.operation)
-    }
-
-    fn diff_state_color(state: DiffDisplayState) -> Color32 {
-        match state {
-            DiffDisplayState::SourceChanged => Color32::from_rgb(160, 0, 0),
-            DiffDisplayState::RuntimeOnly => Color32::from_rgb(128, 96, 0),
-            DiffDisplayState::NoDiff => Color32::from_rgb(0, 96, 0),
-            DiffDisplayState::Unknown => Color32::from_gray(120),
-        }
-    }
-
-    fn operation_color() -> Color32 {
-        Color32::from_rgb(128, 96, 0)
     }
 
     fn can_run_commit_action(&self) -> bool {

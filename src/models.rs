@@ -46,17 +46,6 @@ pub enum AppStatus {
     Error,
 }
 
-impl AppStatus {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::ProjectUnselected => "プロジェクト未選択",
-            Self::Selected => "選択済み",
-            Self::Updating => "更新中",
-            Self::Error => "エラー状態",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct RepoCandidate {
     pub project_name: String,
@@ -71,16 +60,6 @@ pub enum WorkState {
     Unknown,
 }
 
-impl WorkState {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Clean => "クリーン",
-            Self::Dirty => "未コミット変更あり",
-            Self::Unknown => "不明",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitOperation {
     Rebase,
@@ -88,18 +67,6 @@ pub enum GitOperation {
     CherryPick,
     Revert,
     Bisect,
-}
-
-impl GitOperation {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Rebase => "rebase中",
-            Self::Merge => "merge中",
-            Self::CherryPick => "cherry-pick中",
-            Self::Revert => "ロルバ中",
-            Self::Bisect => "bisect中",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
