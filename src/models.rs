@@ -127,6 +127,8 @@ pub struct RepoSnapshot {
     pub work_state: WorkState,
     pub operation: Option<GitOperation>,
     pub dirty: bool,
+    pub has_runtime_changes: bool,
+    pub has_source_changes: bool,
     pub status_porcelain: String,
     pub recent_commits: Vec<CommitInfo>,
     pub consecutive_update_failures: u32,

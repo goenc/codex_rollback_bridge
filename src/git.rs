@@ -88,7 +88,9 @@ pub fn fetch_snapshot(
     let current_branch = get_current_branch(repo_path)?;
     let (head_full_id, head_message, head_message_full, head_datetime) = get_head_info(repo_path)?;
     let status_porcelain = run_git(repo_path, &["status", "--porcelain"])?;
-    let dirty = !status_porcelain.trim().is_empty();
+    let (has_runtime_changes, has_source_changes) =
+        classify_status_porcelain(&status_porcelain);
+    let dirty = has_runtime_changes || has_source_changes;
     let work_state = if dirty {
         WorkState::Dirty
     } else {
@@ -113,6 +115,8 @@ pub fn fetch_snapshot(
         work_state,
         operation,
         dirty,
+        has_runtime_changes,
+        has_source_changes,
         status_porcelain,
         recent_commits,
         consecutive_update_failures: 0,
@@ -551,6 +555,53 @@ fn get_main_branch_head_commit_id(repo_path: &Path) -> Result<Option<String>, St
     }
 }
 
+fn classify_status_porcelain(status_porcelain: &str) -> (bool, bool) {
+    let mut has_runtime_changes = false;
+    let mut has_source_changes = false;
+
+    for line in status_porcelain.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let raw_path = line.get(3..).unwrap_or_default().trim();
+        if raw_path.is_empty() {
+            continue;
+        }
+
+        let mut paths = vec![raw_path];
+        if let Some((before, after)) = raw_path.split_once(" -> ") {
+            paths.clear();
+            paths.push(before.trim());
+            paths.push(after.trim());
+        }
+
+        for path in paths {
+            if is_runtime_status_path(path) {
+                has_runtime_changes = true;
+            } else {
+                has_source_changes = true;
+            }
+        }
+    }
+
+    (has_runtime_changes, has_source_changes)
+}
+
+fn is_runtime_status_path(raw_path: &str) -> bool {
+    let normalized = raw_path
+        .trim()
+        .trim_matches('"')
+        .replace("\\\\", "/")
+        .replace('\\', "/");
+
+    normalized == "runtime"
+        || normalized.starts_with("runtime/")
+        || normalized == "target/debug/runtime"
+        || normalized.starts_with("target/debug/runtime/")
+        || normalized == "target/release/runtime"
+        || normalized.starts_with("target/release/runtime/")
+}
+
 fn detect_git_operation(repo_path: &Path) -> Option<GitOperation> {
     let git_dir = resolve_git_dir(repo_path).ok()?;
     detect_git_operation_in_git_dir(&git_dir)
@@ -713,8 +764,8 @@ fn run_git_bytes(repo_path: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        JST_OFFSET_SECONDS, build_scope_mark, format_git_timestamp_for_display_with_now,
-        parse_records, trim_git_full_message_tail,
+        JST_OFFSET_SECONDS, build_scope_mark, classify_status_porcelain,
+        format_git_timestamp_for_display_with_now, parse_records, trim_git_full_message_tail,
     };
     use chrono::{FixedOffset, TimeZone};
 
@@ -809,5 +860,29 @@ mod tests {
             .expect("valid datetime");
         let formatted = format_git_timestamp_for_display_with_now("not-a-number", now_jst);
         assert_eq!(formatted, None);
+    }
+
+    #[test]
+    fn classify_status_porcelain_returns_clean_when_empty() {
+        assert_eq!(classify_status_porcelain(""), (false, false));
+        assert_eq!(classify_status_porcelain("   \n"), (false, false));
+    }
+
+    #[test]
+    fn classify_status_porcelain_detects_runtime_only_changes() {
+        let status = " M runtime/agent_event_end.md\n?? target/debug/runtime/cache.txt\n";
+        assert_eq!(classify_status_porcelain(status), (true, false));
+    }
+
+    #[test]
+    fn classify_status_porcelain_detects_source_changes() {
+        let status = " M src/app.rs\n";
+        assert_eq!(classify_status_porcelain(status), (false, true));
+    }
+
+    #[test]
+    fn classify_status_porcelain_detects_mixed_changes() {
+        let status = " M runtime/agent_event_end.md\n M src/app.rs\n";
+        assert_eq!(classify_status_porcelain(status), (true, true));
     }
 }

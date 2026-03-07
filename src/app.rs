@@ -14,6 +14,25 @@ struct CopyFeedback {
     is_error: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffDisplayState {
+    SourceChanged,
+    RuntimeOnly,
+    NoDiff,
+    Unknown,
+}
+
+impl DiffDisplayState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SourceChanged => "ソース変更あり",
+            Self::RuntimeOnly => "runtime変更のみ",
+            Self::NoDiff => "差分なし",
+            Self::Unknown => "不明",
+        }
+    }
+}
+
 pub struct CodexRollbackBridgeApp {
     settings: Settings,
     app_status: AppStatus,
@@ -357,20 +376,6 @@ impl CodexRollbackBridgeApp {
                 self.save_settings_with_log();
             }
 
-            let can_manual_refresh = self.git_available && self.selected_repo_path.is_some();
-            let manual_refresh_text = if can_manual_refresh {
-                RichText::new("手動更新")
-            } else {
-                RichText::new("手動更新").color(Color32::from_gray(140))
-            };
-            if ui
-                .add_enabled(can_manual_refresh, Button::new(manual_refresh_text))
-                .clicked()
-            {
-                self.app_status = AppStatus::Updating;
-                self.monitor.send(MonitorCommand::ManualRefresh);
-            }
-
             let can_commit = self.can_run_commit_action();
             let commit_text = if can_commit {
                 RichText::new("コミット")
@@ -384,7 +389,7 @@ impl CodexRollbackBridgeApp {
                 self.show_commit_confirm_dialog = true;
             }
 
-            let work_state = self.displayed_work_state();
+            let diff_state = self.displayed_diff_state();
             let operation = self.displayed_operation();
 
             ui.separator();
@@ -394,8 +399,8 @@ impl CodexRollbackBridgeApp {
             );
             ui.label("｜");
             ui.colored_label(
-                Self::work_state_color(work_state),
-                RichText::new(format!("作業状態: {}", work_state.label())).strong(),
+                Self::diff_state_color(diff_state),
+                RichText::new(format!("差分状態: {}", diff_state.label())).strong(),
             );
             if let Some(operation) = operation {
                 ui.label("｜");
@@ -1213,6 +1218,22 @@ impl CodexRollbackBridgeApp {
             .unwrap_or(WorkState::Unknown)
     }
 
+    fn displayed_diff_state(&self) -> DiffDisplayState {
+        if self.app_status == AppStatus::Error {
+            return DiffDisplayState::Unknown;
+        }
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return DiffDisplayState::Unknown;
+        };
+        if snapshot.has_source_changes {
+            DiffDisplayState::SourceChanged
+        } else if snapshot.has_runtime_changes {
+            DiffDisplayState::RuntimeOnly
+        } else {
+            DiffDisplayState::NoDiff
+        }
+    }
+
     fn displayed_operation(&self) -> Option<GitOperation> {
         if self.app_status == AppStatus::Error {
             return None;
@@ -1222,11 +1243,12 @@ impl CodexRollbackBridgeApp {
             .and_then(|snapshot| snapshot.operation)
     }
 
-    fn work_state_color(work_state: WorkState) -> Color32 {
-        match work_state {
-            WorkState::Clean => Color32::from_rgb(0, 96, 0),
-            WorkState::Dirty => Color32::from_rgb(160, 0, 0),
-            WorkState::Unknown => Color32::from_gray(120),
+    fn diff_state_color(state: DiffDisplayState) -> Color32 {
+        match state {
+            DiffDisplayState::SourceChanged => Color32::from_rgb(160, 0, 0),
+            DiffDisplayState::RuntimeOnly => Color32::from_rgb(128, 96, 0),
+            DiffDisplayState::NoDiff => Color32::from_rgb(0, 96, 0),
+            DiffDisplayState::Unknown => Color32::from_gray(120),
         }
     }
 
@@ -1244,7 +1266,7 @@ impl CodexRollbackBridgeApp {
         if snapshot.operation.is_some() {
             return false;
         }
-        snapshot.work_state == WorkState::Dirty
+        self.displayed_work_state() == WorkState::Dirty
     }
 
     fn can_run_history_action(&self, snapshot: &RepoSnapshot) -> bool {
