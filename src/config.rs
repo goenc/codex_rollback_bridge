@@ -4,6 +4,8 @@ use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const EXTERNAL_SELECTED_REPO_FILE: &str = "selected_repo_path.txt";
+
 pub struct LoadSettingsResult {
     pub settings: Settings,
     pub logs: Vec<String>,
@@ -51,6 +53,41 @@ pub fn runtime_override_path() -> Result<PathBuf, String> {
     Ok(base_dir
         .join(paths::APP_NAME)
         .join(paths::SETTINGS_OVERRIDE_FILE))
+}
+
+pub fn external_selected_repo_path_file() -> Result<PathBuf, String> {
+    let mut path = runtime_override_path()?;
+    path.set_file_name(EXTERNAL_SELECTED_REPO_FILE);
+    Ok(path)
+}
+
+pub fn load_external_selected_repo_path() -> Result<Option<String>, String> {
+    let path = external_selected_repo_path_file()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    if !path.is_file() {
+        return Err(format!("external selected repo path is not a file: {}", path.display()));
+    }
+
+    let contents = fs::read_to_string(&path)
+        .map_err(|err| format!("external selected repo path read failed '{}': {err}", path.display()))?;
+    Ok(normalize_external_selected_repo_path(&contents))
+}
+
+pub fn save_external_selected_repo_path(selected_repo_path: Option<&Path>) -> Result<PathBuf, String> {
+    let path = external_selected_repo_path_file()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create external selected repo directory: {err}"))?;
+    }
+
+    let contents = selected_repo_path
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    fs::write(&path, contents)
+        .map_err(|err| format!("external selected repo path write failed '{}': {err}", path.display()))?;
+    Ok(path)
 }
 
 pub fn load_settings(project_root: &Path) -> LoadSettingsResult {
@@ -285,4 +322,32 @@ fn read_update_interval(
     }
 
     Some(raw)
+}
+
+fn normalize_external_selected_repo_path(contents: &str) -> Option<String> {
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_external_selected_repo_path;
+
+    #[test]
+    fn normalize_external_selected_repo_path_returns_none_for_empty_input() {
+        assert_eq!(normalize_external_selected_repo_path(""), None);
+        assert_eq!(normalize_external_selected_repo_path(" \n\t "), None);
+    }
+
+    #[test]
+    fn normalize_external_selected_repo_path_trims_whitespace() {
+        assert_eq!(
+            normalize_external_selected_repo_path(" C:\\repo\\sample \r\n"),
+            Some("C:\\repo\\sample".to_string())
+        );
+    }
 }

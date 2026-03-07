@@ -42,11 +42,15 @@ pub struct CodexRollbackBridgeApp {
     main_head_confirm_deadline: Option<Instant>,
     show_commit_message_dialog: bool,
     commit_message_dialog_text: Option<String>,
+    next_external_repo_poll_at: Instant,
+    last_external_repo_file_value: Option<Option<String>>,
+    last_external_repo_read_error: Option<String>,
 }
 
 impl CodexRollbackBridgeApp {
     const REVERT_CONFIRM_COUNTDOWN_SECONDS: u64 = 5;
     const REVERT_CONFIRM_ZERO_DISPLAY_MILLIS: u64 = 800;
+    const EXTERNAL_REPO_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
     pub fn new(project_root: PathBuf, _font_validation: Result<PathBuf, String>) -> Self {
         let load_result = config::load_settings(&project_root);
@@ -95,6 +99,9 @@ impl CodexRollbackBridgeApp {
             main_head_confirm_deadline: None,
             show_commit_message_dialog: false,
             commit_message_dialog_text: None,
+            next_external_repo_poll_at: Instant::now(),
+            last_external_repo_file_value: None,
+            last_external_repo_read_error: None,
         };
 
         if !app.git_available {
@@ -108,6 +115,10 @@ impl CodexRollbackBridgeApp {
         {
             app.app_status = AppStatus::Updating;
             app.monitor.send(MonitorCommand::SetRepo(repo_path));
+        }
+        app.poll_external_selected_repo_path(true);
+        if app.selected_repo_path.is_some() {
+            app.save_external_selected_repo_with_log();
         }
 
         app.log(app.config_contract.clone());
@@ -145,6 +156,66 @@ impl CodexRollbackBridgeApp {
                 }
             }
         }
+    }
+
+    fn poll_external_selected_repo_path(&mut self, force: bool) {
+        let now = Instant::now();
+        if !force && now < self.next_external_repo_poll_at {
+            return;
+        }
+        self.next_external_repo_poll_at = now + Self::EXTERNAL_REPO_POLL_INTERVAL;
+
+        let external_value = match config::load_external_selected_repo_path() {
+            Ok(value) => {
+                self.last_external_repo_read_error = None;
+                value
+            }
+            Err(err) => {
+                let should_log = self
+                    .last_external_repo_read_error
+                    .as_ref()
+                    .map(|previous| previous != &err)
+                    .unwrap_or(true);
+                if should_log {
+                    self.log(format!("外部選択ファイル読込失敗: {err}"));
+                }
+                self.last_external_repo_read_error = Some(err);
+                return;
+            }
+        };
+
+        let changed = self
+            .last_external_repo_file_value
+            .as_ref()
+            .map(|previous| previous != &external_value)
+            .unwrap_or(true);
+        if !changed {
+            return;
+        }
+        self.last_external_repo_file_value = Some(external_value.clone());
+
+        let Some(raw_path) = external_value else {
+            return;
+        };
+
+        let candidate = PathBuf::from(raw_path.trim());
+        if !candidate.is_dir() || !git::is_git_repo(&candidate) {
+            self.log(format!(
+                "外部選択ファイルの値を無視しました: {}",
+                candidate.display()
+            ));
+            return;
+        }
+
+        if self.selected_repo_path.as_ref() == Some(&candidate) {
+            return;
+        }
+
+        self.log(format!(
+            "外部選択ファイルの変更を反映: {}",
+            candidate.display()
+        ));
+        self.set_selected_repo(candidate);
     }
 
     fn render_top_panel(&mut self, ui: &mut egui::Ui) {
@@ -1195,6 +1266,7 @@ impl CodexRollbackBridgeApp {
 
         self.monitor.send(MonitorCommand::SetRepo(repo_path));
         self.save_settings_with_log();
+        self.save_external_selected_repo_with_log();
     }
 
     fn commit_selected_repo(&mut self) {
@@ -1339,6 +1411,23 @@ impl CodexRollbackBridgeApp {
         }
     }
 
+    fn save_external_selected_repo_with_log(&mut self) {
+        match config::save_external_selected_repo_path(self.selected_repo_path.as_deref()) {
+            Ok(path) => {
+                self.last_external_repo_file_value = Some(
+                    self.selected_repo_path
+                        .as_ref()
+                        .map(|selected| selected.to_string_lossy().to_string()),
+                );
+                self.last_external_repo_read_error = None;
+                self.log(format!("外部選択保存: {}", path.display()));
+            }
+            Err(err) => {
+                self.log(format!("外部選択保存失敗: {err}"));
+            }
+        }
+    }
+
     fn log(&mut self, message: impl Into<String>) {
         self.logs.push(message.into());
         if self.logs.len() > 400 {
@@ -1350,6 +1439,7 @@ impl CodexRollbackBridgeApp {
 
 impl eframe::App for CodexRollbackBridgeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_external_selected_repo_path(false);
         self.poll_monitor_events();
         let was_dialog_open = self.project_change_dialog_was_open;
 
