@@ -14,6 +14,7 @@ const DATETIME_FETCH_FAILED: &str = "(取得失敗)";
 const JST_OFFSET_SECONDS: i32 = 9 * 60 * 60;
 const MAIN_BRANCH_NAME: &str = "main";
 const WORK_BRANCH_NAME: &str = "work";
+const RECENT_COMMITS_REVISION: &str = "HEAD";
 const RECORD_SEPARATOR: u8 = 0x00;
 const FIELD_SEPARATOR: u8 = 0x1f;
 #[cfg(target_os = "windows")]
@@ -478,7 +479,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
         repo_path,
         &[
             "log",
-            "HEAD",
+            RECENT_COMMITS_REVISION,
             "-n",
             max_count_arg.as_str(),
             "--pretty=format:%H%x1f%h%x1f%ct%x1f%s%x1f%B%x00",
