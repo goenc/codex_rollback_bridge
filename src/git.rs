@@ -178,8 +178,43 @@ pub fn commit_with_runtime_message(repo_path: &Path) -> Result<String, String> {
 }
 
 pub fn reset_head(repo_path: &Path) -> Result<String, String> {
-    run_git(repo_path, &["reset", "--hard", "HEAD~1"])?;
+    let current_branch = get_current_branch(repo_path)?;
+    let current_branch = current_branch.trim().to_string();
+    if current_branch.is_empty() {
+        return Err("現在ブランチ名の取得結果が空です".to_string());
+    }
+    if current_branch == "HEAD" {
+        return Err("detached HEAD のためロルバ同期を実行できません".to_string());
+    }
+
+    let original_head = run_git(repo_path, &["rev-parse", "--verify", "HEAD"])
+        .map_err(|err| format!("ロルバ前HEAD取得に失敗しました: {err}"))?;
+
+    run_git(repo_path, &["reset", "--hard", "HEAD~1"])
+        .map_err(|err| format!("HEAD巻き戻しに失敗しました: {err}"))?;
+
+    if let Err(push_err) = run_git(
+        repo_path,
+        &[
+            "push",
+            "--force-with-lease",
+            "origin",
+            current_branch.as_str(),
+        ],
+    ) {
+        let restore_result = run_git(repo_path, &["reset", "--hard", original_head.as_str()]);
+        return match restore_result {
+            Ok(_) => Err(format!(
+                "リモート同期に失敗したためローカルを元のHEADへ復旧しました: {push_err}"
+            )),
+            Err(restore_err) => Err(format!(
+                "リモート同期失敗後のローカル復旧にも失敗しました: push={push_err} / restore={restore_err}"
+            )),
+        };
+    }
+
     run_git(repo_path, &["rev-parse", "--short", "HEAD"])
+        .map_err(|err| format!("ロルバ後HEAD取得に失敗しました: {err}"))
 }
 
 pub fn set_main_branch_to_head(repo_path: &Path) -> Result<String, String> {
@@ -443,7 +478,7 @@ fn list_recent_commits(repo_path: &Path, max_count: usize) -> Result<Vec<CommitI
         repo_path,
         &[
             "log",
-            "--all",
+            "HEAD",
             "-n",
             max_count_arg.as_str(),
             "--pretty=format:%H%x1f%h%x1f%ct%x1f%s%x1f%B%x00",

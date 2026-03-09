@@ -889,7 +889,8 @@ impl CodexRollbackBridgeApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .fixed_size(egui::vec2(440.0, 140.0))
             .show(ctx, |ui| {
-                ui.label("未コミット変更は破棄されます。実行しますか？");
+                ui.label("未コミット変更は破棄されます。");
+                ui.label("実行すると現在ブランチを origin へ強制同期します。実行しますか？");
                 ui.add_space(6.0);
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -1234,13 +1235,13 @@ impl CodexRollbackBridgeApp {
         self.app_status = AppStatus::Updating;
         match git::reset_head(&repo_path) {
             Ok(short_id) => {
-                let message = format!("ロルバ完了: {short_id}");
+                let message = format!("ロルバとリモート同期完了: {short_id}");
                 self.last_error = None;
                 self.set_copy_feedback(message.clone(), false);
                 self.log(message);
             }
             Err(err) => {
-                let message = format!("ロルバ失敗: {err}");
+                let message = format!("ロルバまたは同期失敗: {err}");
                 self.last_error = Some(message.clone());
                 self.set_copy_feedback(message.clone(), true);
                 self.log(message);

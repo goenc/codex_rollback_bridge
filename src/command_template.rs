@@ -32,10 +32,13 @@ fn context_header(snapshot: &RepoSnapshot) -> String {
 
 pub fn build_previous_head_rollback_command(snapshot: &RepoSnapshot) -> String {
     let repo_path = snapshot.repo_path.to_string_lossy();
+    let current_branch = snapshot.current_branch.trim();
     let header = context_header(snapshot);
     format!(
         "{header}git -C \"{repo_path}\" rev-parse --verify HEAD~1\n\
+git -C \"{repo_path}\" rev-parse --abbrev-ref HEAD\n\
 git -C \"{repo_path}\" reset --hard HEAD~1\n\
+git -C \"{repo_path}\" push --force-with-lease origin {current_branch}\n\
 git -C \"{repo_path}\" status --short\n\
 git -C \"{repo_path}\" log --oneline -n 3"
     )
